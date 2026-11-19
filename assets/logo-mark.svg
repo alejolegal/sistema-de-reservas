@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Un Show Más">
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A2A8F"/>
+      <stop offset="1" stop-color="#03045E"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#fondo)" stroke="#E9B44C" stroke-width="2.500"/>
+  <!-- haz de reflector -->
+  <path d="M32 6 L46 58 H18 Z" fill="#ffffff" opacity=".10"/>
+  <!-- pelota -->
+  <circle cx="32" cy="35" r="15" fill="#ffffff"/>
+  <path d="M32 27.500 38.600 32.300 36.100 40 27.900 40 25.400 32.300Z" fill="#03045E"/>
+  <path d="M32 27.500V22M38.600 32.300 44 30.500M36.100 40 40 46M27.900 40 24 46M25.400 32.300 20 30.500" stroke="#03045E" stroke-width="1.800" stroke-linecap="round" fill="none"/>
+  <!-- estrella -->
+  <path d="M32 7.500 33.900 12.200 39 12.600 35.100 15.900 36.300 20.800 32 18.100 27.700 20.800 28.900 15.900 25 12.600 30.100 12.200Z" fill="#E9B44C"/>
+</svg>

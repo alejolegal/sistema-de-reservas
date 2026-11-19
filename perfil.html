@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mi perfil y reservas | Un Show Más</title>
+    <meta name="theme-color" content="#03045E">
+    <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/components.css">
+</head>
+
+<body>
+    <a class="skip-link" href="#contenido">Saltar al contenido</a>
+    <header id="site-header"></header>
+
+    <main id="contenido" class="container perfil-container" hidden>
+        <section class="puntos-banner" aria-label="Resumen">
+            <div>
+                <p class="eyebrow">Mi perfil</p>
+                <h1>Hola, <span id="perfil-saludo-nombre"></span></h1>
+                <p>Turnos reservados: <strong id="perfil-total-alquileres">0</strong></p>
+            </div>
+            <div class="puntos-num"><span id="perfil-puntos-val">0</span> <small>puntos</small></div>
+        </section>
+
+        <div id="aviso-password" class="alert alert-warn" role="alert" hidden>
+            <strong>Cambiá tu contraseña.</strong> Estás usando la contraseña inicial. Completá "Nueva contraseña" más abajo.
+        </div>
+
+        <section class="card-box" aria-labelledby="titulo-datos">
+            <h2 id="titulo-datos" class="perfil-sec-title">Mis datos</h2>
+            <form id="form-perfil" novalidate>
+                <div class="form-grid">
+                    <div class="field">
+                        <label for="input-nombre">Nombre y apellido</label>
+                        <input type="text" id="input-nombre" required autocomplete="name">
+                    </div>
+                    <div class="field">
+                        <label for="input-telefono">Teléfono / WhatsApp</label>
+                        <input type="tel" id="input-telefono" required autocomplete="tel" inputmode="numeric">
+                    </div>
+                    <div class="field">
+                        <label for="input-password-actual">Contraseña actual</label>
+                        <input type="password" id="input-password-actual" autocomplete="current-password" placeholder="Solo si vas a cambiarla">
+                    </div>
+                    <div class="field">
+                        <label for="input-password">Nueva contraseña (opcional)</label>
+                        <input type="password" id="input-password" autocomplete="new-password" placeholder="Dejar vacío para mantener la actual">
+                    </div>
+                </div>
+                <p id="perfil-error" class="error-msg" role="alert" hidden></p>
+                <button type="submit" class="btn">Guardar cambios</button>
+            </form>
+        </section>
+
+        <section class="card-box" aria-labelledby="titulo-reservas">
+            <h2 id="titulo-reservas" class="perfil-sec-title">Mis reservas</h2>
+            <div id="lista-mis-reservas" class="lista-reservas"></div>
+        </section>
+    </main>
+
+    <footer id="site-footer" class="site-footer"></footer>
+
+    <script src="js/store.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/booking.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/perfil.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel de gestión | Un Show Más</title>
+    <meta name="robots" content="noindex">
+    <meta name="theme-color" content="#03045E">
+    <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/components.css">
+    <link rel="stylesheet" href="css/admin.css">
+</head>
+
+<body>
+    <a class="skip-link" href="#contenido">Saltar al contenido</a>
+    <header id="site-header"></header>
+
+    <main id="contenido" class="container admin-container" hidden>
+        <div class="admin-titulo">
+            <div>
+                <p class="eyebrow">Administración</p>
+                <h1>Panel de gestión</h1>
+            </div>
+            <p class="admin-fecha" id="admin-fecha-hoy"></p>
+        </div>
+
+        <div id="aviso-password" class="alert alert-warn" role="alert" hidden>
+            <strong>Cambiá la contraseña inicial.</strong> Estás usando la contraseña por defecto del sistema.
+            <a href="perfil.html">Cambiarla ahora</a>
+        </div>
+
+        <section class="kpis" id="kpis" aria-label="Resumen de hoy"></section>
+
+        <div class="admin-tabs" role="tablist" aria-label="Secciones del panel">
+            <button type="button" role="tab" class="admin-tab active" data-tab="agenda" aria-selected="true">Agenda</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="calendario" aria-selected="false">Calendario</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="canchas" aria-selected="false">Canchas y precios</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="reglas" aria-selected="false">Reglas y pagos</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="clientes" aria-selected="false">Clientes</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="reportes" aria-selected="false">Reportes</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="datos" aria-selected="false">Respaldo</button>
+        </div>
+
+        <!-- AGENDA -->
+        <section class="admin-panel" id="panel-agenda" role="tabpanel">
+            <div class="panel-barra">
+                <div class="filtros">
+                    <div class="field">
+                        <label for="f-fecha">Fecha</label>
+                        <input type="date" id="f-fecha">
+                    </div>
+                    <div class="field">
+                        <label for="f-cancha">Cancha</label>
+                        <select id="f-cancha"></select>
+                    </div>
+                    <div class="field">
+                        <label for="f-estado">Estado</label>
+                        <select id="f-estado">
+                            <option value="">Todos</option>
+                            <option value="activa">Confirmadas</option>
+                            <option value="pendiente_pago">Pendientes de pago</option>
+                            <option value="completada">Jugadas</option>
+                            <option value="cancelada">Canceladas</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="f-buscar">Buscar cliente</label>
+                        <input type="search" id="f-buscar" placeholder="Nombre o teléfono">
+                    </div>
+                </div>
+                <div class="acciones-barra">
+                    <button type="button" class="btn btn-secundario" id="btn-todas">Ver todas las fechas</button>
+                    <button type="button" class="btn" id="btn-nueva-reserva">+ Nueva reserva</button>
+                </div>
+            </div>
+            <div id="lista-agenda" class="tabla-wrap"></div>
+        </section>
+
+        <!-- CALENDARIO -->
+        <section class="admin-panel" id="panel-calendario" role="tabpanel" hidden>
+            <div class="card-box">
+                <h2 class="perfil-sec-title">Días en que el complejo está cerrado</h2>
+                <p class="muted">Los clientes no podrán reservar en estas fechas (feriados, mantenimiento, eventos).</p>
+                <form id="form-cierre" class="inline-form">
+                    <div class="field">
+                        <label for="cierre-fecha">Agregar fecha de cierre</label>
+                        <input type="date" id="cierre-fecha" required>
+                    </div>
+                    <button type="submit" class="btn">Cerrar este día</button>
+                </form>
+                <div id="lista-cierres" class="chips-lista"></div>
+            </div>
+        </section>
+
+        <!-- CANCHAS -->
+        <section class="admin-panel" id="panel-canchas" role="tabpanel" hidden>
+            <div class="card-box">
+                <div class="panel-cabecera">
+                    <div>
+                        <h2 class="perfil-sec-title">Canchas y precios</h2>
+                        <p class="muted">Editá nombre, precio por hora y disponibilidad. Los cambios se aplican en la web al instante.</p>
+                    </div>
+                    <button type="button" class="btn btn-secundario" id="btn-nueva-cancha">+ Agregar cancha</button>
+                </div>
+                <div id="lista-canchas"></div>
+            </div>
+            <div class="card-box">
+                <h2 class="perfil-sec-title">Horarios de atención</h2>
+                <form id="form-horarios" class="form-grid" novalidate>
+                    <div class="field">
+                        <label for="h-apertura">Primer turno (hora de inicio)</label>
+                        <input type="number" id="h-apertura" min="0" max="23" required>
+                    </div>
+                    <div class="field">
+                        <label for="h-cierre">Fin del último turno (24 = medianoche)</label>
+                        <input type="number" id="h-cierre" min="1" max="24" required>
+                    </div>
+                    <div class="field">
+                        <label for="h-dias">Días de anticipación para reservar</label>
+                        <input type="number" id="h-dias" min="1" max="60" required>
+                    </div>
+                    <div class="field">
+                        <label for="h-max">Máximo de horas seguidas por reserva</label>
+                        <input type="number" id="h-max" min="1" max="4" required>
+                    </div>
+                    <div class="field">
+                        <label for="h-tolerancia">Minutos de tolerancia para reservar un turno ya iniciado</label>
+                        <input type="number" id="h-tolerancia" min="0" max="59" required>
+                    </div>
+                </form>
+                <button type="submit" class="btn" form="form-horarios">Guardar horarios</button>
+            </div>
+        </section>
+
+        <!-- REGLAS Y PAGOS -->
+        <section class="admin-panel" id="panel-reglas" role="tabpanel" hidden>
+            <form id="form-reglas" class="card-box" novalidate>
+                <h2 class="perfil-sec-title">Reglas del alquiler</h2>
+                <div class="form-grid">
+                    <div class="field">
+                        <label for="r-nombre">Nombre del complejo</label>
+                        <input type="text" id="r-nombre" required maxlength="40">
+                    </div>
+                    <div class="field">
+                        <label for="r-senia">Monto de la seña ($)</label>
+                        <input type="number" id="r-senia" min="0" step="100" required>
+                    </div>
+                    <div class="field">
+                        <label for="r-cancelacion">Horas mínimas para cancelar sin cargo</label>
+                        <input type="number" id="r-cancelacion" min="0" required>
+                    </div>
+                    <div class="field">
+                        <label for="r-puntos">Puntos por hora reservada</label>
+                        <input type="number" id="r-puntos" min="0" required>
+                    </div>
+                    <div class="field">
+                        <label for="r-descuento">Descuento en la 2.ª hora (%)</label>
+                        <input type="number" id="r-descuento" min="0" max="100" required>
+                    </div>
+                    <div class="field field-check">
+                        <label class="check"><input type="checkbox" id="r-descuento-activo"> Promoción de 2.ª hora activa</label>
+                    </div>
+                </div>
+
+                <h2 class="perfil-sec-title">Medios de pago y contacto</h2>
+                <div class="form-grid">
+                    <div class="field field-check">
+                        <label class="check"><input type="checkbox" id="r-mp"> Aceptar Mercado Pago</label>
+                    </div>
+                    <div class="field field-check">
+                        <label class="check"><input type="checkbox" id="r-transf"> Aceptar transferencia</label>
+                    </div>
+                    <div class="field">
+                        <label for="r-alias">Alias para transferencias</label>
+                        <input type="text" id="r-alias" maxlength="40">
+                    </div>
+                    <div class="field">
+                        <label for="r-retencion">Minutos para pagar una transferencia</label>
+                        <input type="number" id="r-retencion" min="5" max="1440" required>
+                    </div>
+                    <div class="field">
+                        <label for="r-whatsapp">WhatsApp del complejo (con código de país)</label>
+                        <input type="tel" id="r-whatsapp" inputmode="numeric" placeholder="5491122334455">
+                    </div>
+                    <div class="field field-check">
+                        <label class="check"><input type="checkbox" id="r-prueba"> Mercado Pago en modo prueba (simulado)</label>
+                    </div>
+                </div>
+                <p class="hint">Mientras el modo prueba esté activo, el pago con Mercado Pago es una simulación: no se cobra dinero real. El cobro real requiere conectar el servidor con las credenciales del complejo.</p>
+                <p id="reglas-error" class="error-msg" role="alert" hidden></p>
+                <button type="submit" class="btn">Guardar cambios</button>
+            </form>
+        </section>
+
+        <!-- CLIENTES -->
+        <section class="admin-panel" id="panel-clientes" role="tabpanel" hidden>
+            <div class="card-box">
+                <div class="panel-cabecera">
+                    <h2 class="perfil-sec-title">Clientes registrados</h2>
+                    <div class="field field-busqueda">
+                        <label for="c-buscar" class="sr-only">Buscar cliente</label>
+                        <input type="search" id="c-buscar" placeholder="Buscar por nombre, correo o teléfono">
+                    </div>
+                </div>
+                <div id="lista-clientes" class="tabla-wrap"></div>
+            </div>
+        </section>
+
+        <!-- REPORTES -->
+        <section class="admin-panel" id="panel-reportes" role="tabpanel" hidden>
+            <div class="card-box">
+                <div class="panel-cabecera">
+                    <h2 class="perfil-sec-title">Reportes</h2>
+                    <div class="filtros">
+                        <div class="field">
+                            <label for="rep-desde">Desde</label>
+                            <input type="date" id="rep-desde">
+                        </div>
+                        <div class="field">
+                            <label for="rep-hasta">Hasta</label>
+                            <input type="date" id="rep-hasta">
+                        </div>
+                        <button type="button" class="btn btn-secundario" id="btn-csv">Descargar CSV</button>
+                        <button type="button" class="btn btn-secundario" id="btn-imprimir">Imprimir</button>
+                    </div>
+                </div>
+                <div id="reporte-contenido"></div>
+            </div>
+        </section>
+
+        <!-- RESPALDO -->
+        <section class="admin-panel" id="panel-datos" role="tabpanel" hidden>
+            <div class="card-box">
+                <h2 class="perfil-sec-title">Respaldo de datos</h2>
+                <p class="muted">Por ahora los datos se guardan en este navegador. Descargá un respaldo periódicamente: sirve para recuperar la información o pasarla a otra computadora.</p>
+                <div class="acciones-fila">
+                    <button type="button" class="btn" id="btn-exportar">Descargar respaldo</button>
+                    <label class="btn btn-secundario" for="input-importar">Restaurar desde un archivo</label>
+                    <input type="file" id="input-importar" accept="application/json,.json" hidden>
+                    <button type="button" class="btn btn-peligro" id="btn-restablecer">Restablecer configuración</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer id="site-footer" class="site-footer"></footer>
+
+    <script src="js/store.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/booking.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/admin.js"></script>
+</body>
+
+</html>

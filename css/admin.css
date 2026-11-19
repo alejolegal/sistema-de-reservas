@@ -1,0 +1,78 @@
+/* css/admin.css - Panel de gestión. */
+
+.admin-container { max-width: 1240px; }
+.admin-titulo { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: .5rem; margin-bottom: 1rem; }
+.admin-titulo h1 { margin: 0; font-size: 1.8rem; }
+.admin-fecha { margin: 0; color: var(--texto-suave); font-weight: 600; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .85rem; margin-bottom: 1.25rem; }
+.kpi { background: var(--blanco); border: 1px solid var(--borde); border-radius: 14px; padding: .9rem 1rem; box-shadow: var(--sombra); }
+.kpi strong { display: block; font-size: 1.6rem; color: var(--navy); line-height: 1.1; }
+.kpi span { color: var(--texto-suave); font-size: .85rem; }
+.kpi-alerta { border-color: #f0d28a; background: var(--ambar-claro); }
+.kpis-chicos { margin: 1rem 0; }
+.kpis-chicos .kpi { box-shadow: none; }
+
+.admin-tabs { display: flex; gap: .35rem; overflow-x: auto; padding-bottom: .35rem; margin-bottom: 1rem; border-bottom: 1px solid var(--borde); }
+.admin-tab { flex: none; min-height: 44px; padding: .5rem 1rem; border: 0; background: transparent; font: inherit; font-weight: 600; color: var(--texto-suave); cursor: pointer; border-bottom: 3px solid transparent; border-radius: 8px 8px 0 0; }
+.admin-tab:hover { color: var(--navy); background: var(--celeste); }
+.admin-tab.active { color: var(--navy); border-bottom-color: var(--oro); }
+.admin-panel[hidden] { display: none; }
+
+.panel-barra, .panel-cabecera { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; justify-content: space-between; margin-bottom: 1rem; }
+.filtros { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+.filtros .field { margin: 0; min-width: 150px; }
+.acciones-barra, .acciones-fila { display: flex; flex-wrap: wrap; gap: .5rem; }
+.field-busqueda { margin: 0; min-width: 240px; }
+
+.tabla-wrap { background: var(--blanco); border: 1px solid var(--borde); border-radius: 14px; overflow-x: auto; }
+.tabla { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.tabla th { text-align: left; background: var(--navy); color: #fff; padding: .7rem .85rem; font-weight: 600; white-space: nowrap; position: sticky; top: 0; }
+.tabla td { padding: .7rem .85rem; border-top: 1px solid var(--borde); vertical-align: top; }
+.tabla tbody tr:hover { background: #f8faff; }
+.tabla small { color: var(--texto-suave); }
+.celda-acciones { display: flex; flex-wrap: wrap; gap: .35rem; }
+.tabla select { min-height: 36px; padding: .25rem .5rem; }
+.card-box .tabla-wrap { border-radius: 10px; }
+
+.inline-form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin: 1rem 0; }
+.inline-form .field { margin: 0; }
+.chips-lista { display: flex; flex-wrap: wrap; gap: .5rem; }
+.chip-cierre { display: inline-flex; align-items: center; gap: .5rem; background: var(--rojo-claro); color: #8f1d1d; border: 1px solid #f2b8b8; border-radius: 999px; padding: .3rem .4rem .3rem .85rem; font-weight: 600; font-size: .88rem; }
+.chip-cierre button { width: 28px; height: 28px; border-radius: 50%; border: 0; background: #8f1d1d; color: #fff; cursor: pointer; font-size: 1rem; line-height: 1; }
+
+.cancha-edit { display: grid; grid-template-columns: 2fr 1.4fr 1.2fr auto auto; gap: .75rem 1rem; align-items: end; padding: 1rem 0; border-top: 1px solid var(--borde); }
+.cancha-edit:first-child { border-top: 0; }
+.cancha-edit .field, .cancha-edit .field label { margin: 0; }
+.cancha-edit .field label { display: flex; flex-direction: column; gap: .35rem; }
+.cancha-acciones { display: flex; gap: .4rem; }
+
+.resumen-linea { background: var(--celeste); padding: .6rem .8rem; border-radius: 10px; font-weight: 600; }
+.sub-titulo { font-size: 1.05rem; margin: 1.25rem 0 .5rem; }
+.top-lista { margin: 0; padding-left: 1.2rem; display: grid; gap: .25rem; }
+.top-lista span { color: var(--texto-suave); }
+
+@media (max-width: 900px) {
+    .cancha-edit { grid-template-columns: 1fr 1fr; }
+    .cancha-edit .check, .cancha-acciones { grid-column: 1 / -1; }
+}
+
+/* Tablas apiladas en celular: cada fila es una tarjeta */
+@media (max-width: 720px) {
+    .tabla thead { display: none; }
+    .tabla, .tabla tbody, .tabla tr, .tabla td { display: block; width: 100%; }
+    .tabla tr { border-top: 1px solid var(--borde); padding: .5rem .25rem; }
+    .tabla td { border: 0; padding: .3rem .85rem; display: flex; justify-content: space-between; gap: 1rem; text-align: right; }
+    .tabla td::before { content: attr(data-label); font-weight: 700; color: var(--navy); text-align: left; flex: none; }
+    .celda-acciones { justify-content: flex-end; }
+    .cancha-edit { grid-template-columns: 1fr; }
+    .filtros .field { flex: 1 1 140px; }
+}
+
+/* Impresión de reportes */
+@media print {
+    .site-header, .site-footer, .whatsapp-float, .admin-tabs, .panel-cabecera .filtros button, #kpis, .skip-link, #toasts { display: none !important; }
+    .admin-panel[hidden] { display: none !important; }
+    body { background: #fff; }
+    .card-box, .kpi { box-shadow: none; }
+}
