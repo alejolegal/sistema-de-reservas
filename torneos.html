@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Torneos y comunidad | Un Show Más</title>
     <meta name="theme-color" content="#03045E">
+    <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
     <link rel="stylesheet" href="css/main.css">
     <link rel="stylesheet" href="css/components.css">
@@ -13,7 +14,7 @@
 
 <body>
     <a class="skip-link" href="#contenido">Saltar al contenido</a>
-    <header id="site-header"></header>
+    <header id="site-header" class="site-header"></header>
 
     <main id="contenido" class="container torneos-wrapper">
         <section class="torneos-card">
@@ -37,12 +38,14 @@
 
     <footer id="site-footer" class="site-footer"></footer>
 
-    <script src="js/store.js"></script>
-    <script src="js/config.js"></script>
+    <script src="vendor/supabase-2.119.0.js"></script>
+    <script src="js/env.js"></script>
     <script src="js/utils.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/config.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/ui.js"></script>
-    <script>document.addEventListener('DOMContentLoaded', () => UI.iniciarPagina('torneos'));</script>
+    <script>document.addEventListener('DOMContentLoaded', () => UI.arrancar('torneos', () => {}));</script>
 </body>
 
 </html>

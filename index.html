@@ -3,51 +3,65 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Reservá tu cancha | Un Show Más</title>
-    <meta name="description" content="Reservá online canchas de Fútbol 5, Fútbol 7 y Pádel. Elegí el día y el horario disponible y asegurá tu turno.">
+    <meta name="description" content="Reservá online tu cancha de Fútbol 5, Fútbol 7 o Pádel. Elegí día y horario, pagá la seña con Mercado Pago y listo.">
     <meta name="theme-color" content="#03045E">
+    <meta property="og:title" content="Reservá tu cancha online">
+    <meta property="og:description" content="Elegí día y horario, pagá la seña con Mercado Pago y listo.">
+    <meta property="og:type" content="website">
     <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
+    <link rel="apple-touch-icon" href="assets/icon-192.png">
+    <link rel="manifest" href="manifest.webmanifest">
     <link rel="stylesheet" href="css/main.css">
     <link rel="stylesheet" href="css/components.css">
 </head>
 
 <body>
     <a class="skip-link" href="#contenido">Saltar al contenido</a>
-    <header id="site-header"></header>
+    <header id="site-header" class="site-header"></header>
 
     <main id="contenido" class="container">
         <section class="hero" aria-labelledby="hero-titulo">
             <p class="eyebrow">Reservas online</p>
-            <h1 id="hero-titulo">Reservá tu cancha en <span>Un Show Más</span></h1>
-            <p class="hero-sub">Fútbol 5, Fútbol 7 y Pádel. Elegí el día, tocá un horario libre y asegurá tu turno en un minuto.</p>
+            <h1 id="hero-titulo">Reservá tu cancha en <span id="hero-nombre">Un Show Más</span></h1>
+            <p class="hero-sub" id="hero-sub">Elegí el día, tocá un horario libre y asegurá tu turno en un minuto.</p>
             <ol class="pasos">
-                <li><span>1</span> Elegí el día y el horario</li>
+                <li><span>1</span> Elegí día y horario</li>
                 <li><span>2</span> Pagá la seña</li>
                 <li><span>3</span> ¡A jugar!</li>
             </ol>
         </section>
-        <span id="hero-nombre" hidden></span>
 
+        <p id="aviso-publico" class="aviso-publico" role="status" hidden></p>
         <div id="aviso-promo"></div>
         <section id="panel-usuario" class="user-panel" aria-label="Mi cuenta" hidden></section>
-
-        <section class="reglas-card" aria-labelledby="reglas-titulo">
-            <h2 id="reglas-titulo">Antes de reservar</h2>
-            <ul id="lista-reglas"></ul>
-        </section>
 
         <section aria-labelledby="catalogo-titulo">
             <h2 id="catalogo-titulo" class="section-title">Elegí tu cancha</h2>
             <div class="canchas-grid" id="catalogo-canchas"></div>
         </section>
+
+        <div class="info-grid">
+            <section class="reglas-card" aria-labelledby="reglas-titulo">
+                <h2 id="reglas-titulo">Cómo funciona</h2>
+                <ul id="lista-reglas"></ul>
+            </section>
+            <section id="cta-fijo" class="cta-fijo" hidden>
+                <h2>¿Jugás todas las semanas?</h2>
+                <p>Pedí tu <strong>turno fijo</strong>: mismo día, misma hora, sin tener que reservar cada vez.</p>
+                <a class="btn btn-whatsapp" target="_blank" rel="noopener" href="#">Pedirlo por WhatsApp</a>
+            </section>
+        </div>
     </main>
 
     <footer id="site-footer" class="site-footer"></footer>
 
-    <script src="js/store.js"></script>
-    <script src="js/config.js"></script>
+    <script src="vendor/supabase-2.119.0.js"></script>
+    <script src="js/env.js"></script>
     <script src="js/utils.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/config.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/booking.js"></script>
     <script src="js/ui.js"></script>

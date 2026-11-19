@@ -145,3 +145,30 @@ input:focus, select:focus { outline: 3px solid rgba(0, 119, 182, .3); border-col
     .nav-menu a, .nav-salir { text-align: left; padding: .75rem; }
     .modal-card { padding: 1.15rem; }
 }
+
+/* ---------- Agregados v2 ---------- */
+.site-header:empty { min-height: 66px; }
+.site-footer .pie-links { margin-bottom: .35rem; }
+.site-footer a { color: var(--texto-suave); }
+.btn-mp { background: #009ee3; }
+.btn-mp:hover { background: #007eb5; }
+.btn-link { background: none; border: 0; padding: .5rem 0; font: inherit; color: var(--azul); text-decoration: underline; cursor: pointer; }
+.btn-link.peligro { color: var(--rojo); }
+.centrado-bloque { display: block; margin: .75rem auto 0; }
+.btn[aria-busy="true"] { cursor: progress; opacity: .85; }
+.skeleton { height: 44px; border-radius: 10px; margin: .5rem 0; background: linear-gradient(90deg, #e9eef7 25%, #f4f7fc 50%, #e9eef7 75%); background-size: 200% 100%; animation: brillo 1.2s infinite linear; }
+.skeleton.corto { width: 60%; }
+@keyframes brillo { to { background-position: -200% 0; } }
+.estado-vacio { text-align: center; padding: 2.5rem 1rem; max-width: 520px; margin: 0 auto; }
+.estado-vacio .estado-icono { margin: 0 auto 1rem; }
+.estado-icono { width: 72px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2.1rem; font-weight: 800; background: var(--celeste); color: var(--navy); margin: 0 auto .75rem; }
+.chip-demo { display: inline-block; background: var(--ambar-claro); color: #7a4f08; border: 1px solid #f0d28a; border-radius: 999px; padding: .05rem .55rem; font-size: .78rem; font-weight: 700; }
+.form-grid.compacto { gap: 0 .75rem; }
+textarea { width: 100%; min-height: 80px; padding: .6rem .8rem; font: inherit; color: var(--texto); background: var(--blanco); border: 1px solid #b9c4dc; border-radius: 10px; resize: vertical; }
+details.plegable > summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; margin: 0; }
+details.plegable > summary::after { content: '+'; font-size: 1.4rem; color: var(--texto-suave); }
+details.plegable[open] > summary { margin-bottom: 1rem; }
+details.plegable[open] > summary::after { content: '−'; }
+details.plegable > summary::-webkit-details-marker { display: none; }
+@supports (padding: max(0px)) { .whatsapp-float { bottom: max(16px, env(safe-area-inset-bottom)); } }
+.container { padding-bottom: 5.5rem; }

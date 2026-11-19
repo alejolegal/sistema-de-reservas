@@ -1,154 +1,92 @@
-// js/auth.js - Registro, ingreso, roles y perfiles.
-// NOTA: mientras los datos vivan en el navegador (localStorage), la seguridad de
-// roles es solo de interfaz. La protección real llega con el backend (Supabase + RLS).
+// js/auth.js - Cuentas de usuario (Supabase Auth) y roles.
+// La seguridad real la aplica la base de datos (RLS): esto solo adapta la interfaz.
 
 const Auth = (() => {
-    const ROLES_DUENIO = ['admin', 'duenio'];
-    const ROLES_STAFF = ['admin', 'duenio', 'empleado'];
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const PASSWORD_MIN = 6;
     const PAGINAS_PERMITIDAS = ['index.html', 'perfil.html', 'admin.html', 'torneos.html'];
+    let usuario = null; // perfil + email
 
-    const normalizarEmail = (e) => String(e || '').trim().toLowerCase();
-    const crearHash = (password, sal) => Utils.hash(`${sal}:${password}`);
-    const sanitizar = ({ passHash, sal, password, ...publico }) => publico;
+    const esStaff = (u = usuario) => !!u && ['empleado', 'duenio'].includes(u.rol);
+    const esDuenio = (u = usuario) => !!u && u.rol === 'duenio';
 
-    const esStaff = (u) => !!u && ROLES_STAFF.includes(u.rol);
-    const esDuenio = (u) => !!u && ROLES_DUENIO.includes(u.rol);
-
-    // Si todavía no existe un administrador, se crea uno inicial que DEBE cambiar su contraseña.
-    async function asegurarAdminInicial() {
-        const usuarios = Store.usuarios();
-        if (usuarios.some((u) => ROLES_DUENIO.includes(u.rol))) return;
-        const sal = Utils.sal();
-        usuarios.push({
-            id: 'admin_default',
-            nombre: 'Administrador General',
-            email: 'admin@complejo.com',
-            telefono: '1100000000',
-            sal,
-            passHash: await crearHash('admin1234', sal),
-            puntos: 0,
-            rol: 'admin',
-            cambiarPassword: true,
-            creado: new Date().toISOString()
-        });
-        Store.guardarUsuarios(usuarios);
+    function traducir(error) {
+        const t = String(error?.message || error || '');
+        if (/Invalid login credentials/i.test(t)) return 'Correo o contraseña incorrectos.';
+        if (/already registered|already been registered|User already/i.test(t)) return 'Ese correo ya tiene una cuenta. Probá ingresar.';
+        if (/Password should be/i.test(t)) return `La contraseña debe tener al menos ${PASSWORD_MIN} caracteres.`;
+        if (/rate limit|too many/i.test(t)) return 'Demasiados intentos. Esperá un minuto y probá de nuevo.';
+        if (/invalid.*email|email.*invalid/i.test(t)) return 'Ingresá un correo electrónico válido.';
+        if (/should be different/i.test(t)) return 'La nueva contraseña tiene que ser distinta de la actual.';
+        return Db.traducir(error);
     }
 
-    async function verificarPassword(usuario, password) {
-        if (usuario.passHash) return (await crearHash(password, usuario.sal || '')) === usuario.passHash;
-        // Usuarios creados por versiones anteriores (contraseña sin cifrar): se migran al ingresar.
-        return usuario.password !== undefined && usuario.password === password;
+    async function cargarPerfil(user) {
+        if (!user) { usuario = null; return null; }
+        const perfil = await Db.q(Db.sb.from('perfiles').select('*').eq('id', user.id).maybeSingle());
+        usuario = perfil ? { ...perfil, email: perfil.email || user.email } : null;
+        return usuario;
+    }
+
+    async function iniciar() {
+        const { data } = await Db.sb.auth.getSession();
+        await cargarPerfil(data?.session?.user || null);
+        return usuario;
+    }
+
+    async function login(email, password) {
+        const { data, error } = await Db.sb.auth.signInWithPassword({ email: String(email || '').trim().toLowerCase(), password: String(password || '') });
+        if (error) return { exito: false, mensaje: traducir(error) };
+        await cargarPerfil(data.user);
+        return { exito: true, usuario };
     }
 
     async function registrar({ nombre, email, telefono, password }) {
         nombre = String(nombre || '').trim();
-        email = normalizarEmail(email);
+        email = String(email || '').trim().toLowerCase();
         telefono = Utils.digitos(telefono);
-
         if (nombre.length < 2) return { exito: false, mensaje: 'Ingresá tu nombre y apellido.' };
         if (!EMAIL_RE.test(email)) return { exito: false, mensaje: 'Ingresá un correo electrónico válido.' };
-        if (telefono.length < 8 || telefono.length > 13) return { exito: false, mensaje: 'Ingresá un teléfono válido (solo números, con característica).' };
+        if (telefono.length < 8 || telefono.length > 13) return { exito: false, mensaje: 'Ingresá un WhatsApp válido (con característica, sin 0 ni 15).' };
         if (String(password || '').length < PASSWORD_MIN) return { exito: false, mensaje: `La contraseña debe tener al menos ${PASSWORD_MIN} caracteres.` };
 
-        await asegurarAdminInicial();
-        const usuarios = Store.usuarios();
-        if (usuarios.some((u) => normalizarEmail(u.email) === email)) {
-            return { exito: false, mensaje: 'Ese correo electrónico ya está registrado.' };
+        const { data, error } = await Db.sb.auth.signUp({ email, password, options: { data: { nombre, telefono } } });
+        if (error) return { exito: false, mensaje: traducir(error) };
+        if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+            return { exito: false, mensaje: 'Ese correo ya tiene una cuenta. Probá ingresar.' };
         }
-
-        const sal = Utils.sal();
-        const nuevo = {
-            id: Utils.uid('user'),
-            nombre,
-            email,
-            telefono,
-            sal,
-            passHash: await crearHash(password, sal),
-            puntos: 0,
-            rol: 'cliente', // el rol nunca se elige desde el registro público
-            creado: new Date().toISOString()
-        };
-        usuarios.push(nuevo);
-        Store.guardarUsuarios(usuarios);
-        Store.iniciarSesion(nuevo.id);
-        return { exito: true, usuario: sanitizar(nuevo) };
+        if (!data.session) {
+            const r = await login(email, password);
+            if (!r.exito) return r;
+        }
+        await cargarPerfil(data.user);
+        return { exito: true, usuario };
     }
 
-    async function login(email, password) {
-        await asegurarAdminInicial();
-        email = normalizarEmail(email);
-        const usuarios = Store.usuarios();
-        const usuario = usuarios.find((u) => normalizarEmail(u.email) === email);
-
-        if (!usuario || !(await verificarPassword(usuario, String(password || '')))) {
-            return { exito: false, mensaje: 'Correo o contraseña incorrectos.' };
-        }
-
-        if (!usuario.passHash) {
-            const eraClaveInicial = ROLES_DUENIO.includes(usuario.rol) && password === 'admin';
-            usuario.sal = Utils.sal();
-            usuario.passHash = await crearHash(password, usuario.sal);
-            delete usuario.password;
-            if (eraClaveInicial) usuario.cambiarPassword = true;
-            Store.guardarUsuarios(usuarios);
-        }
-
-        Store.iniciarSesion(usuario.id);
-        return { exito: true, usuario: sanitizar(usuario) };
-    }
-
-    function usuarioActual() {
-        const id = Store.sesionId();
-        if (!id) return null;
-        const usuario = Store.usuarios().find((u) => u.id === id);
-        return usuario ? sanitizar(usuario) : null;
-    }
-
-    async function actualizarPerfil(usuarioId, { nombre, telefono, passwordActual, passwordNueva }) {
+    async function actualizarPerfil({ nombre, telefono }) {
         nombre = String(nombre || '').trim();
         telefono = Utils.digitos(telefono);
         if (nombre.length < 2) return { exito: false, mensaje: 'Ingresá tu nombre y apellido.' };
-        if (telefono.length < 8 || telefono.length > 13) return { exito: false, mensaje: 'Ingresá un teléfono válido.' };
-
-        const usuarios = Store.usuarios();
-        const usuario = usuarios.find((u) => u.id === usuarioId);
-        if (!usuario) return { exito: false, mensaje: 'Usuario no encontrado.' };
-
-        if (passwordNueva) {
-            if (passwordNueva.length < PASSWORD_MIN) return { exito: false, mensaje: `La nueva contraseña debe tener al menos ${PASSWORD_MIN} caracteres.` };
-            if (!(await verificarPassword(usuario, String(passwordActual || '')))) {
-                return { exito: false, mensaje: 'La contraseña actual no es correcta.' };
-            }
-            usuario.sal = Utils.sal();
-            usuario.passHash = await crearHash(passwordNueva, usuario.sal);
-            delete usuario.password;
-            delete usuario.cambiarPassword;
+        if (telefono.length < 8 || telefono.length > 13) return { exito: false, mensaje: 'Ingresá un WhatsApp válido.' };
+        try {
+            await Db.q(Db.sb.from('perfiles').update({ nombre, telefono }).eq('id', usuario.id));
+            usuario = { ...usuario, nombre, telefono };
+            return { exito: true, mensaje: 'Tus datos se actualizaron.' };
+        } catch (e) {
+            return { exito: false, mensaje: e.message };
         }
-
-        usuario.nombre = nombre;
-        usuario.telefono = telefono;
-        Store.guardarUsuarios(usuarios);
-        return { exito: true, mensaje: 'Tus datos se actualizaron correctamente.' };
     }
 
-    // Solo el dueño puede ascender un cliente a empleado (o devolverlo a cliente).
-    function cambiarRol(actor, usuarioId, nuevoRol) {
-        if (!esDuenio(actor)) return { exito: false, mensaje: 'No tiene permisos para esta acción.' };
-        if (!['cliente', 'empleado'].includes(nuevoRol)) return { exito: false, mensaje: 'Rol no válido.' };
-        const usuarios = Store.usuarios();
-        const usuario = usuarios.find((u) => u.id === usuarioId);
-        if (!usuario || ROLES_DUENIO.includes(usuario.rol)) return { exito: false, mensaje: 'No se puede modificar ese usuario.' };
-        usuario.rol = nuevoRol;
-        Store.guardarUsuarios(usuarios);
-        return { exito: true };
+    async function cambiarPassword(actual, nueva) {
+        if (String(nueva || '').length < PASSWORD_MIN) return { exito: false, mensaje: `La nueva contraseña debe tener al menos ${PASSWORD_MIN} caracteres.` };
+        const verificacion = await Db.sb.auth.signInWithPassword({ email: usuario.email, password: String(actual || '') });
+        if (verificacion.error) return { exito: false, mensaje: 'La contraseña actual no es correcta.' };
+        const { error } = await Db.sb.auth.updateUser({ password: nueva });
+        if (error) return { exito: false, mensaje: traducir(error) };
+        return { exito: true, mensaje: 'Contraseña actualizada.' };
     }
 
-    // Solo se aceptan destinos internos conocidos (evita redirecciones a sitios externos).
-    function destinoSeguro(valor) {
-        return PAGINAS_PERMITIDAS.includes(valor) ? valor : null;
-    }
+    const destinoSeguro = (valor) => (PAGINAS_PERMITIDAS.includes(valor) ? valor : null);
 
     function irALogin() {
         const actual = location.pathname.split('/').pop() || 'index.html';
@@ -156,27 +94,21 @@ const Auth = (() => {
         location.replace(`login.html${next ? `?next=${encodeURIComponent(next)}` : ''}`);
     }
 
-    function requerirSesion() {
-        const usuario = usuarioActual();
-        if (!usuario) irALogin();
-        return usuario;
-    }
-
     function requerirStaff() {
-        const usuario = usuarioActual();
         if (!usuario) { irALogin(); return null; }
-        if (!esStaff(usuario)) { location.replace('index.html'); return null; }
+        if (!esStaff()) { location.replace('index.html'); return null; }
         return usuario;
     }
 
-    function logout() {
-        Store.cerrarSesion();
+    async function logout() {
+        await Db.sb.auth.signOut();
+        usuario = null;
         location.href = 'index.html';
     }
 
     return {
-        esStaff, esDuenio, destinoSeguro,
-        asegurarAdminInicial, registrar, login, usuarioActual, actualizarPerfil, cambiarRol,
-        requerirSesion, requerirStaff, logout
+        iniciar, login, registrar, logout, actualizarPerfil, cambiarPassword, requerirStaff, destinoSeguro,
+        recargar: async () => cargarPerfil((await Db.sb.auth.getUser()).data?.user || null),
+        usuario: () => usuario, esStaff, esDuenio
     };
 })();
