@@ -1,307 +1,141 @@
-// js/booking.js - Reglas de negocio de las reservas.
-// Toda la validación vive acá (no solo en la interfaz): disponibilidad, fechas cerradas,
-// horarios, cancelaciones, retención de transferencias y puntos.
+// js/booking.js - Reglas de negocio del lado del cliente: disponibilidad, precios y estados.
+// La validación definitiva (y la regla anti-reservas-dobles) la hace la base de datos.
 
 const Booking = (() => {
-    const ESTADOS_OCUPAN = ['activa', 'pendiente_pago'];
-    const ESTADOS_VIGENTES = ESTADOS_OCUPAN;
+    // ---------- Estados ----------
+    const ESTADOS = {
+        confirmada: { texto: 'Confirmada', clase: 'badge-activa' },
+        jugada: { texto: 'Jugada', clase: 'badge-completada' },
+        pendiente_pago: { texto: 'Esperando pago', clase: 'badge-pendiente' },
+        cancelada: { texto: 'Cancelada', clase: 'badge-cancelada' },
+        vencida: { texto: 'Pago vencido', clase: 'badge-cancelada' }
+    };
+    const METODOS = { mercadopago: 'Mercado Pago', transferencia: 'Transferencia', manual: 'Mostrador', fijo: 'Turno fijo' };
+    const PAGOS = {
+        pendiente: 'Pago pendiente', aprobado: 'Seña pagada (Mercado Pago)', demo: 'Seña pagada (demostración)',
+        en_cancha: 'Se paga en la cancha', manual: 'Cargada en el mostrador', confirmado_admin: 'Transferencia confirmada',
+        reembolsado: 'Seña devuelta', reembolso_pendiente: 'Devolución pendiente', sin_reembolso: 'Seña no devuelta'
+    };
 
-    const fallo = (mensaje) => ({ ok: false, mensaje });
+    const inicio = (r) => Utils.crearFecha(r.fecha, r.hora_inicio);
+    const fin = (r) => Utils.crearFecha(r.fecha, r.hora_inicio + r.horas);
+    const rango = (r) => `${Utils.hhmm(r.hora_inicio)} a ${Utils.hhmm((r.hora_inicio + r.horas) % 24)} hs`;
+    const terminada = (r) => fin(r) <= Utils.ahora();
 
-    // ---------- Normalización y estados automáticos ----------
+    // Estado "visible": una confirmada que ya terminó se muestra como jugada.
+    const estadoVisible = (r) => (r.estado === 'confirmada' && terminada(r) ? 'jugada' : r.estado);
+    const etiqueta = (r) => ESTADOS[estadoVisible(r)] || { texto: r.estado, clase: '' };
+    const senaPagada = (r) => ['aprobado', 'demo', 'confirmado_admin'].includes(r.pago_estado);
+    const saldo = (r) => Math.max(0, (r.precio_total || 0) - (senaPagada(r) || r.metodo_pago === 'manual' ? r.monto_senia || 0 : 0));
+    const vigente = (r) => ['confirmada', 'pendiente_pago'].includes(r.estado) && !terminada(r);
 
-    // Convierte reservas de versiones anteriores ("15:00 y 16:00") al formato actual (horas: [...]).
-    function normalizar(r) {
-        let migrada = false;
-        if (!Array.isArray(r.horas) || r.horas.length === 0) {
-            r.horas = String(r.horaInicio || '')
-                .split(/\s+y\s+/i)
-                .map((h) => h.replace(/\s*hs\.?$/i, '').trim())
-                .filter(Boolean);
-            migrada = true;
-        }
-        r.horaInicio = r.horas[0] || '';
-        r.cantidadHoras = r.horas.length || 1;
-        r.puntosOtorgados = Number(r.puntosOtorgados) || 0;
-        r.montoSenia = Number(r.montoSenia) || 0;
-        r.precioTotal = Number(r.precioTotal) || 0;
-        return migrada;
+    // ---------- Disponibilidad ----------
+    // ctx = { ocupacion: [...filas de la función ocupacion()], cerradas: Set, ahora }
+    async function cargarContexto(desde, hasta) {
+        const [ocupacion, cerradas] = await Promise.all([
+            Db.rpc('ocupacion', { p_desde: desde, p_hasta: hasta }),
+            Db.q(Db.sb.from('fechas_cerradas').select('fecha, motivo').gte('fecha', desde).lte('fecha', hasta))
+        ]);
+        return {
+            ocupacion,
+            cerradas: new Map(cerradas.map((c) => [c.fecha, c.motivo || ''])),
+            ahora: Utils.ahora()
+        };
     }
 
-    const inicio = (r) => Utils.crearFecha(r.fecha, r.horas[0]);
+    // Devuelve la fila que ocupa esa hora (o null)
+    const ocupante = (ctx, canchaId, fecha, hora) => ctx.ocupacion.find((o) =>
+        o.cancha_id === canchaId && o.fecha === fecha && hora >= o.hora_inicio && hora < o.hora_inicio + o.horas) || null;
 
-    function fin(r) {
-        const d = Utils.crearFecha(r.fecha, r.horas[r.horas.length - 1]);
-        d.setHours(d.getHours() + 1);
-        return d;
-    }
-
-    // "18:00 a 19:00 hs"
-    function rangoHorario(r) {
-        const ultima = r.horas[r.horas.length - 1] || '00:00';
-        const hFin = (Number(ultima.split(':')[0]) + 1) % 24;
-        return `${r.horas[0]} a ${Utils.pad(hFin)}:00 hs`;
-    }
-
-    // Lee las reservas aplicando los cambios automáticos de estado:
-    //  - transferencia sin pagar a tiempo  -> cancelada (se libera el turno)
-    //  - turno que ya terminó              -> completada
-    function obtenerReservas() {
-        const lista = Store.reservasCrudas();
-        const ahora = new Date();
-        let cambios = false;
-
-        lista.forEach((r) => {
-            if (normalizar(r)) cambios = true;
-            if (r.estado === 'pendiente_pago' && ((r.venceEn && new Date(r.venceEn) < ahora) || fin(r) <= ahora)) {
-                r.estado = 'cancelada';
-                r.motivo = 'Plazo de pago vencido';
-                r.canceladaEn = ahora.toISOString();
-                cambios = true;
-            } else if (r.estado === 'activa' && fin(r) <= ahora) {
-                r.estado = 'completada';
-                cambios = true;
-            }
-        });
-
-        if (cambios) Store.guardarReservas(lista);
-        return lista;
-    }
-
-    const contexto = () => ({
-        reservas: obtenerReservas(),
-        cerradas: Store.fechasCerradas(),
-        ahora: new Date()
-    });
-
-    // ---------- Disponibilidad y precios ----------
-
-    // 'libre' | 'ocupado' | 'vencido' | 'cerrado'
+    // 'libre' | 'ocupado' | 'fijo' | 'reservando' | 'vencido' | 'cerrado'
     function estadoHora(ctx, canchaId, fecha, hora) {
-        if (ctx.cerradas.includes(fecha)) return 'cerrado';
-        const ocupado = ctx.reservas.some((r) =>
-            r.canchaId === canchaId && r.fecha === fecha
-            && ESTADOS_OCUPAN.includes(r.estado) && r.horas.includes(hora));
-        if (ocupado) return 'ocupado';
+        if (ctx.cerradas.has(fecha)) return 'cerrado';
+        const o = ocupante(ctx, canchaId, fecha, hora);
+        if (o) return o.estado === 'pendiente_pago' ? 'reservando' : o.fijo ? 'fijo' : 'ocupado';
         const limite = Utils.crearFecha(fecha, hora);
-        limite.setMinutes(limite.getMinutes() + Config.get().toleranciaMinutos);
+        limite.setUTCMinutes(limite.getUTCMinutes() + Config.get().toleranciaMinutos);
         return ctx.ahora > limite ? 'vencido' : 'libre';
     }
 
     function horasConsecutivas(hora, cantidad) {
-        const horarios = Config.horarios();
-        const indice = horarios.indexOf(hora);
-        if (indice === -1) return null;
-        const tramo = horarios.slice(indice, indice + cantidad);
+        const lista = Config.horarios();
+        const i = lista.indexOf(hora);
+        if (i === -1) return null;
+        const tramo = lista.slice(i, i + cantidad);
         return tramo.length === cantidad ? tramo : null;
     }
 
-    function calcularPrecio(cancha, cantidadHoras) {
+    function calcularPrecio(cancha, horas) {
         const cfg = Config.get();
-        let total = cancha.precioHora * cantidadHoras;
+        let total = cancha.precioHora * horas;
         let descuento = 0;
-        if (cfg.descuentoActivo && cantidadHoras >= 2) {
-            descuento = cancha.precioHora * (cfg.descuentoSegundaHora / 100);
-            total -= descuento;
-        }
+        if (cfg.descuentoActivo && horas >= 2) descuento = Math.round(cancha.precioHora * cfg.descuentoSegundaHora / 100);
+        total -= descuento;
         const senia = Math.min(cfg.montoSenia, total);
-        return {
-            total: Math.round(total),
-            descuento: Math.round(descuento),
-            senia: Math.round(senia),
-            saldo: Math.round(total - senia)
-        };
+        return { total, descuento, senia, saldo: total - senia };
     }
 
-    function validarSeleccion(ctx, { canchaId, fecha, hora, cantidadHoras = 1, esStaff = false }) {
+    function validarSeleccion(ctx, { canchaId, fecha, hora, horas = 1 }) {
         const cfg = Config.get();
         const cancha = Config.canchaPorId(canchaId);
-        if (!cancha || !cancha.activa) return fallo('La cancha seleccionada no está disponible.');
-        if (!Utils.esFechaValida(fecha)) return fallo('La fecha elegida no es válida.');
-
-        const hoy = Utils.fechaISO(ctx.ahora);
-        if (fecha < hoy) return fallo('No se pueden reservar turnos en fechas que ya pasaron.');
-        if (!esStaff && fecha > Utils.sumarDias(hoy, cfg.diasAnticipacion - 1)) {
-            return fallo(`Solo se puede reservar con hasta ${cfg.diasAnticipacion} días de anticipación.`);
+        if (!cancha || !cancha.activa) return { ok: false, mensaje: 'La cancha elegida no está disponible.' };
+        if (ctx.cerradas.has(fecha)) return { ok: false, mensaje: 'El complejo está cerrado ese día.' };
+        if (hora === null || hora === undefined) return { ok: false, mensaje: 'Elegí un horario.' };
+        if (horas < 1 || horas > cfg.maxHorasReserva) return { ok: false, mensaje: `Se pueden reservar entre 1 y ${cfg.maxHorasReserva} horas seguidas.` };
+        const tramo = horasConsecutivas(hora, horas);
+        if (!tramo) return { ok: false, mensaje: 'El turno se pasa del horario de cierre.' };
+        for (const h of tramo) {
+            const e = estadoHora(ctx, canchaId, fecha, h);
+            if (e === 'vencido') return { ok: false, mensaje: `Las ${Utils.hhmm(h)} ya pasaron.` };
+            if (e !== 'libre') return { ok: false, mensaje: `Las ${Utils.hhmm(h)} ya están ocupadas.` };
         }
-        if (ctx.cerradas.includes(fecha)) return fallo('El complejo permanece cerrado en esa fecha.');
-
-        const n = Number(cantidadHoras);
-        if (!Number.isInteger(n) || n < 1 || n > cfg.maxHorasReserva) {
-            return fallo(`Se pueden reservar entre 1 y ${cfg.maxHorasReserva} hora(s) seguidas.`);
-        }
-        if (!hora) return fallo('Elegí un horario.');
-
-        const horas = horasConsecutivas(hora, n);
-        if (!horas) return fallo(n > 1 ? 'El turno supera el horario de cierre del complejo.' : 'El horario elegido no es válido.');
-
-        for (const h of horas) {
-            const estado = estadoHora(ctx, canchaId, fecha, h);
-            if (estado === 'ocupado') return fallo(`El horario de las ${h} hs ya está ocupado.`);
-            if (estado === 'vencido') return fallo(`El horario de las ${h} hs ya pasó.`);
-        }
-        return { ok: true, cancha, horas };
+        return { ok: true, cancha, tramo };
     }
 
-    // ---------- Puntos ----------
-
-    function sumarPuntos(usuarioId, cantidad) {
-        if (!usuarioId || !cantidad) return;
-        const usuarios = Store.usuarios();
-        const usuario = usuarios.find((u) => u.id === usuarioId);
-        if (!usuario) return;
-        usuario.puntos = Math.max(0, (usuario.puntos || 0) + cantidad);
-        Store.guardarUsuarios(usuarios);
-    }
-
-    function otorgarPuntos(r) {
-        if (!r.usuarioId || r.puntosOtorgados) return;
-        r.puntosOtorgados = Math.round(Config.get().puntosPorHora * r.cantidadHoras);
-        sumarPuntos(r.usuarioId, r.puntosOtorgados);
-    }
-
-    function devolverPuntos(r) {
-        if (r.usuarioId && r.puntosOtorgados) sumarPuntos(r.usuarioId, -r.puntosOtorgados);
-        r.puntosOtorgados = 0;
-    }
-
-    // ---------- Operaciones ----------
-
-    // metodoPago: 'mercadopago' | 'transferencia' | 'manual' (cargada por el personal)
-    function crearReserva({
-        usuarioId = null, canchaId, fecha, hora, cantidadHoras = 1,
-        metodoPago = 'mercadopago', cliente = null, montoSenia = null, creadaPor = null, extra = {}
-    }) {
-        const cfg = Config.get();
-        const manual = metodoPago === 'manual';
-
-        if (!['mercadopago', 'transferencia', 'manual'].includes(metodoPago)) return { exito: false, mensaje: 'Método de pago no válido.' };
-        if (metodoPago === 'mercadopago' && !cfg.pagoMercadoPago) return { exito: false, mensaje: 'El pago con Mercado Pago no está habilitado.' };
-        if (metodoPago === 'transferencia' && !cfg.pagoTransferencia) return { exito: false, mensaje: 'El pago por transferencia no está habilitado.' };
-
-        if (manual) {
-            if (!cliente || String(cliente.nombre || '').trim().length < 2) return { exito: false, mensaje: 'Ingresá el nombre del cliente.' };
-        } else if (!usuarioId || !Store.usuarios().some((u) => u.id === usuarioId)) {
-            return { exito: false, mensaje: 'Tenés que iniciar sesión para reservar.' };
-        }
-
-        const validacion = validarSeleccion(contexto(), { canchaId, fecha, hora, cantidadHoras, esStaff: manual });
-        if (!validacion.ok) return { exito: false, mensaje: validacion.mensaje };
-
-        const { cancha, horas } = validacion;
-        const precio = calcularPrecio(cancha, horas.length);
-        const senia = manual && montoSenia !== null
-            ? Math.min(Math.max(0, Number(montoSenia) || 0), precio.total)
-            : precio.senia;
-
-        const estado = metodoPago === 'transferencia' ? 'pendiente_pago' : 'activa';
-        const reserva = {
-            id: Utils.uid('res'),
-            usuarioId: manual ? null : usuarioId,
-            cliente: manual ? { nombre: String(cliente.nombre).trim(), telefono: Utils.digitos(cliente.telefono) } : null,
-            canchaId,
-            nombreCancha: cancha.nombre,
-            tipoCancha: cancha.tipo,
-            fecha,
-            horas,
-            horaInicio: horas[0],
-            cantidadHoras: horas.length,
-            precioTotal: precio.total,
-            montoSenia: senia,
-            saldoRestante: Math.round(precio.total - senia),
-            estado,
-            metodoPago,
-            // 'aprobado_test' = simulación hasta integrar el cobro real con Mercado Pago (requiere servidor)
-            pagoEstado: manual ? 'manual' : metodoPago === 'mercadopago' ? 'aprobado_test' : 'pendiente',
-            venceEn: estado === 'pendiente_pago'
-                ? new Date(Date.now() + cfg.minutosRetencionTransferencia * 60000).toISOString() : null,
-            puntosOtorgados: 0,
-            creadaPor,
-            fechaCreacion: new Date().toISOString(),
-            ...extra
-        };
-
-        if (estado === 'activa') otorgarPuntos(reserva);
-
-        const lista = obtenerReservas();
-        lista.push(reserva);
-        Store.guardarReservas(lista);
-        return { exito: true, reserva };
-    }
-
-    // Solo el personal: confirmar pago / reactivar ('activa') o cancelar ('cancelada').
-    function cambiarEstado(reservaId, nuevoEstado, actor) {
-        if (!Auth.esStaff(actor)) return { exito: false, mensaje: 'No tenés permisos para esta acción.' };
-        if (!['activa', 'cancelada'].includes(nuevoEstado)) return { exito: false, mensaje: 'Estado no válido.' };
-
-        const lista = obtenerReservas();
-        const r = lista.find((x) => x.id === reservaId);
-        if (!r) return { exito: false, mensaje: 'Reserva no encontrada.' };
-        if (r.estado === nuevoEstado) return { exito: true, mensaje: 'Sin cambios.' };
-
-        if (nuevoEstado === 'activa') {
-            if (r.estado === 'completada') return { exito: false, mensaje: 'El turno ya se jugó.' };
-            if (fin(r) <= new Date()) return { exito: false, mensaje: 'El turno ya finalizó y no se puede habilitar.' };
-            const cerrado = Store.fechasCerradas().includes(r.fecha);
-            const conflicto = lista.some((o) =>
-                o.id !== r.id && o.canchaId === r.canchaId && o.fecha === r.fecha
-                && ESTADOS_OCUPAN.includes(o.estado) && o.horas.some((h) => r.horas.includes(h)));
-            if (conflicto) return { exito: false, mensaje: 'No se puede habilitar: otro turno ya ocupa ese horario.' };
-            if (cerrado) return { exito: false, mensaje: 'El complejo está cerrado en esa fecha.' };
-
-            if (r.metodoPago === 'transferencia') r.pagoEstado = 'confirmado_admin';
-            r.estado = 'activa';
-            r.venceEn = null;
-            r.motivo = null;
-            otorgarPuntos(r);
-        } else {
-            r.estado = 'cancelada';
-            r.motivo = 'Cancelada por el complejo';
-            r.canceladaEn = new Date().toISOString();
-            devolverPuntos(r);
-        }
-
-        Store.guardarReservas(lista);
-        return { exito: true, mensaje: nuevoEstado === 'activa' ? 'El turno quedó confirmado.' : 'El turno fue cancelado y el horario quedó libre.' };
-    }
-
-    // Indica si un usuario puede cancelar (y por qué no, si no puede).
-    function puedeCancelar(r, usuario) {
-        const staff = Auth.esStaff(usuario);
-        if (!usuario || (!staff && r.usuarioId !== usuario.id)) return { ok: false, motivo: 'Esta reserva no te pertenece.' };
-        if (!ESTADOS_OCUPAN.includes(r.estado)) return { ok: false, motivo: 'Esta reserva ya no se puede cancelar.' };
-        if (!staff && r.estado === 'activa') {
-            const limite = Config.get().limiteHorasCancelacion;
-            const horasRestantes = (inicio(r) - new Date()) / 3600000;
-            if (horasRestantes < limite) {
-                return { ok: false, motivo: `Solo se puede cancelar hasta ${limite} horas antes del turno.` };
-            }
-        }
+    // ¿El cliente puede cancelar por su cuenta? (el servidor vuelve a controlarlo)
+    function puedeCancelar(r) {
+        if (!vigente(r)) return { ok: false, motivo: 'Esta reserva ya no se puede cancelar.' };
+        if (r.estado === 'pendiente_pago') return { ok: true };
+        const limite = Config.get().limiteHorasCancelacion;
+        const horas = (inicio(r) - Utils.ahora()) / 3600000;
+        if (horas < limite) return { ok: false, motivo: `Solo se puede cancelar hasta ${limite} horas antes del turno.` };
         return { ok: true };
     }
 
-    function cancelarReserva(reservaId, usuario) {
-        const lista = obtenerReservas();
-        const r = lista.find((x) => x.id === reservaId);
-        if (!r) return { exito: false, mensaje: 'Reserva no encontrada.' };
-
-        const permiso = puedeCancelar(r, usuario);
-        if (!permiso.ok) return { exito: false, mensaje: permiso.motivo };
-
-        r.estado = 'cancelada';
-        r.motivo = Auth.esStaff(usuario) && r.usuarioId !== usuario.id ? 'Cancelada por el complejo' : 'Cancelada por el cliente';
-        r.canceladaEn = new Date().toISOString();
-        devolverPuntos(r);
-        Store.guardarReservas(lista);
-        return { exito: true, mensaje: 'Reserva cancelada. El horario quedó libre.' };
+    // ---------- Reservas guardadas en este dispositivo (para quien reserva sin cuenta) ----------
+    const CLAVE_LOCAL = 'misReservas';
+    function recordar(id, token) {
+        const lista = Utils.local.leer(CLAVE_LOCAL, []).filter((x) => x.id !== id);
+        lista.unshift({ id, token, guardada: Date.now() });
+        Utils.local.guardar(CLAVE_LOCAL, lista.slice(0, 30));
+    }
+    const recordadas = () => Utils.local.leer(CLAVE_LOCAL, []);
+    async function cargarRecordadas() {
+        const lista = recordadas();
+        const filas = await Promise.all(lista.map((x) => Db.rpc('ver_reserva', { p_id: x.id, p_token: x.token })
+            .then((r) => (r ? { ...r, token: x.token } : null)).catch(() => null)));
+        return filas.filter(Boolean);
     }
 
-    const reservasDeUsuario = (usuarioId) => obtenerReservas().filter((r) => r.usuarioId === usuarioId);
+    const linkReserva = (r, token = r.token) => `reserva.html?id=${encodeURIComponent(r.id)}&t=${encodeURIComponent(token)}`;
+
+    // Enlace para agendar el turno en Google Calendar
+    function linkCalendario(r) {
+        const cfg = Config.get();
+        const f = (d) => Utils.aInstante(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+        const p = new URLSearchParams({
+            action: 'TEMPLATE',
+            text: `${r.cancha_nombre} · ${cfg.nombreComplejo}`,
+            dates: `${f(inicio(r))}/${f(fin(r))}`,
+            details: `Reserva ${r.codigo}. Resto a pagar en la cancha: ${Utils.moneda(saldo(r))}.`,
+            location: cfg.direccion || cfg.nombreComplejo
+        });
+        return `https://calendar.google.com/calendar/render?${p}`;
+    }
 
     return {
-        ESTADOS_VIGENTES,
-        obtenerReservas, contexto, estadoHora, horasConsecutivas, calcularPrecio, validarSeleccion,
-        crearReserva, cambiarEstado, cancelarReserva, puedeCancelar, reservasDeUsuario,
-        inicio, fin, rangoHorario
+        ESTADOS, METODOS, PAGOS, inicio, fin, rango, terminada, estadoVisible, etiqueta, senaPagada, saldo, vigente,
+        cargarContexto, ocupante, estadoHora, horasConsecutivas, calcularPrecio, validarSeleccion, puedeCancelar,
+        recordar, recordadas, cargarRecordadas, linkReserva, linkCalendario
     };
 })();

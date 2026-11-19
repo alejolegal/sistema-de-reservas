@@ -133,3 +133,70 @@ form[hidden] { display: none; }
     .cancha-body, .cancha-head { padding-left: 1rem; padding-right: 1rem; }
     .horarios-grid { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
 }
+
+/* ---------- Agregados v2: inicio ---------- */
+.aviso-publico { background: var(--ambar-claro); border: 1px solid #f0d28a; color: #6b4507; padding: .8rem 1rem; border-radius: 12px; font-weight: 600; text-align: center; }
+.aviso-publico[hidden] { display: none; }
+.chip-promo.chico { font-size: .68rem; padding: 0 .4rem; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 1.25rem; margin-top: 2rem; }
+.info-grid .reglas-card { margin: 0; }
+.cta-fijo { background: linear-gradient(135deg, #064e3b, #0f9d6b); color: #fff; border-radius: var(--radio); padding: 1.25rem; display: flex; flex-direction: column; gap: .5rem; align-items: flex-start; }
+.cta-fijo[hidden] { display: none; }
+.cta-fijo h2 { color: #fff; font-size: 1.2rem; margin: 0; }
+.cta-fijo p { margin: 0 0 .5rem; opacity: .95; }
+.btn-dia { display: flex; flex-direction: column; align-items: center; line-height: 1.15; min-width: 76px; }
+.btn-dia small { font-size: .66rem; font-weight: 600; color: var(--verde); }
+.btn-dia.active small { color: #c9f1de; }
+.btn-dia.lleno small, .btn-dia.cerrado small { color: #8a94ad; }
+.btn-dia.cerrado { text-decoration: none; }
+.btn-dia.cerrado.active small, .btn-dia.lleno.active small { color: #dfe5f5; }
+.slot.fijo { background: #eef1fb; color: #5b6784; border-style: solid; cursor: not-allowed; }
+.slot.reservando { background: var(--ambar-claro); color: #8a5a0c; border-color: #f0d28a; cursor: not-allowed; }
+.slot.cerrado { background: #f5f6fa; color: #aab2c6; cursor: not-allowed; }
+.cancha-body .resumen { margin-top: 1rem; }
+.resumen dd.destacado { color: var(--navy); font-size: 1.15rem; }
+.ticket-mini { background: var(--celeste); border-radius: 12px; padding: .75rem 1rem; margin-bottom: 1rem; display: flex; flex-direction: column; }
+.ticket-mini strong { color: var(--navy); font-size: 1.05rem; }
+.quien { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
+.quien .avatar { width: 40px; height: 40px; font-size: .9rem; }
+.mp-demo { border: 2px dashed #009ee3; border-radius: 14px; padding: 1rem; margin-bottom: 1rem; text-align: center; background: #f0f9fe; }
+.mp-demo-marca { font-weight: 800; color: #009ee3; }
+.mp-demo-marca span { background: var(--ambar); color: #fff; border-radius: 6px; font-size: .7rem; padding: .1rem .4rem; vertical-align: middle; }
+.mp-demo-monto { font-size: 2.2rem; font-weight: 800; color: var(--navy); margin: .25rem 0 0; }
+
+/* ---------- Comprobante de reserva ---------- */
+.reserva-container { max-width: 560px; }
+.estado-hero { text-align: center; padding: 1.25rem 0 1rem; }
+.estado-hero h1 { font-size: 1.7rem; margin-bottom: .25rem; }
+.estado-hero p { color: var(--texto-suave); margin: 0; }
+.tono-ok .estado-icono { background: var(--verde); color: #fff; }
+.tono-espera .estado-icono { background: var(--ambar-claro); color: var(--ambar); }
+.tono-mal .estado-icono { background: var(--rojo-claro); color: var(--rojo); }
+.festejo .estado-icono { animation: festejo .6s ease-out; }
+@keyframes festejo { 0% { transform: scale(.4); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+.pago-pendiente { background: var(--ambar-claro); border: 1px solid #f0d28a; border-radius: 14px; padding: 1rem; margin-bottom: 1rem; }
+.pago-pendiente .btn { margin-top: .5rem; }
+.cuenta-regresiva { font-variant-numeric: tabular-nums; font-size: 1.1rem; }
+.ticket { background: var(--blanco); border: 1px solid var(--borde); border-radius: 18px; box-shadow: var(--sombra); overflow: hidden; margin-bottom: 1rem; }
+.ticket-cabecera { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem 1.25rem; border-bottom: 2px dashed var(--borde); }
+.ticket-cabecera > div { display: flex; flex-direction: column; }
+.ticket-codigo { font-size: 1.6rem; letter-spacing: .12em; color: var(--navy); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.ticket-datos { margin: 0; padding: .5rem 1.25rem 1rem; }
+.ticket-datos > div { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem 0; border-bottom: 1px solid #eef1f7; }
+.ticket-datos > div:last-child { border-bottom: 0; }
+.ticket-datos dt { color: var(--texto-suave); }
+.ticket-datos dd { margin: 0; text-align: right; font-weight: 600; }
+.ticket-datos small { color: var(--texto-suave); font-weight: 500; }
+.acciones-reserva { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .5rem; margin-bottom: 1rem; }
+.pie-reserva { text-align: center; }
+.pie-reserva .btn-block { margin-top: 1rem; }
+
+/* ---------- Mis reservas ---------- */
+a.reserva-card { display: block; text-decoration: none; color: inherit; }
+a.reserva-card:hover { border-color: var(--azul); }
+.historial { margin-top: 1rem; }
+.historial summary { cursor: pointer; font-weight: 700; color: var(--navy); padding: .5rem 0; }
+.historial .lista-reservas { margin-top: .5rem; opacity: .9; }
+.invitado .acciones-fila { display: flex; gap: .5rem; flex-wrap: wrap; }
+.sub-titulo { font-size: 1.05rem; margin: .5rem 0 .75rem; }
+.vacio .btn { margin-top: .75rem; }

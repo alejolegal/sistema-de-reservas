@@ -54,7 +54,8 @@ const UI = (() => {
             boton.className = `btn ${b.clase || ''}`.trim();
             boton.textContent = b.texto;
             boton.addEventListener('click', async () => {
-                if (b.accion && (await b.accion(ctl)) === false) return;
+                if (boton.disabled) return;
+                if (b.accion && (await b.accion(ctl, boton)) === false) return;
                 cerrar();
             });
             acciones.appendChild(boton);
@@ -115,26 +116,26 @@ const UI = (() => {
     function montarEncabezado(activa = '') {
         const host = document.getElementById('site-header');
         if (!host) return;
-        const usuario = Auth.usuarioActual();
+        const usuario = Auth.usuario();
         const nombre = Config.get().nombreComplejo;
         const enlace = (href, texto, clave) =>
             `<a href="${href}"${activa === clave ? ' aria-current="page"' : ''}>${texto}</a>`;
 
-        const items = [enlace('index.html', 'Reservar', 'inicio'), enlace('torneos.html', 'Torneos', 'torneos')];
+        const items = [enlace('index.html', 'Reservar', 'inicio'), enlace('perfil.html', 'Mis reservas', 'perfil'), enlace('torneos.html', 'Torneos', 'torneos')];
         if (usuario) {
-            if (Auth.esStaff(usuario)) items.push(enlace('admin.html', 'Panel de gestión', 'admin'));
-            items.push(enlace('perfil.html', 'Mi perfil', 'perfil'));
-            items.push('<button type="button" class="nav-salir" data-accion="salir">Cerrar sesión</button>');
+            if (Auth.esStaff()) items.push(enlace('admin.html', 'Panel', 'admin'));
+            items.push('<button type="button" class="nav-salir" data-accion="salir">Salir</button>');
         } else {
             items.push(enlace('login.html', 'Ingresar', 'login'));
         }
 
+        const tipos = [...new Set(Config.canchasActivas().map((c) => c.tipo).filter(Boolean))].join(' · ');
         host.className = 'site-header';
         host.innerHTML = `
             <div class="header-inner">
                 <a class="brand" href="index.html" aria-label="${Utils.esc(nombre)}, ir al inicio">
                     <img src="assets/logo-mark.svg" alt="" width="44" height="44">
-                    <span class="brand-text"><strong>${Utils.esc(nombre)}</strong><small>Fútbol 5 · Fútbol 7 · Pádel</small></span>
+                    <span class="brand-text"><strong>${Utils.esc(nombre)}</strong><small>${Utils.esc(tipos || 'Reservas online')}</small></span>
                 </a>
                 <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="nav-menu">Menú</button>
                 <nav id="nav-menu" class="nav-menu" aria-label="Principal">${items.join('')}</nav>
@@ -153,7 +154,13 @@ const UI = (() => {
     function montarPie() {
         const host = document.getElementById('site-footer');
         if (!host) return;
-        host.innerHTML = `<p>© ${new Date().getFullYear()} ${Utils.esc(Config.get().nombreComplejo)} · Todos los derechos reservados</p>`;
+        const cfg = Config.get();
+        const extras = [
+            cfg.direccion ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cfg.direccion)}" target="_blank" rel="noopener">${Utils.esc(cfg.direccion)}</a>` : '',
+            cfg.instagram ? `<a href="https://instagram.com/${encodeURIComponent(cfg.instagram)}" target="_blank" rel="noopener">@${Utils.esc(cfg.instagram)}</a>` : '',
+            cfg.whatsapp ? `<a href="${Utils.esc(Utils.linkWhatsApp(cfg.whatsapp))}" target="_blank" rel="noopener">WhatsApp</a>` : ''
+        ].filter(Boolean).join(' · ');
+        host.innerHTML = `${extras ? `<p class="pie-links">${extras}</p>` : ''}<p>© ${Utils.ahora().getUTCFullYear()} ${Utils.esc(cfg.nombreComplejo)}</p>`;
     }
 
     function montarWhatsapp() {
@@ -161,12 +168,12 @@ const UI = (() => {
         if (!whatsapp || document.querySelector('.whatsapp-float')) return;
         const enlace = document.createElement('a');
         enlace.className = 'whatsapp-float';
-        enlace.href = `https://wa.me/${whatsapp}?text=${encodeURIComponent(`Hola, tengo una consulta sobre las reservas en ${nombreComplejo}.`)}`;
+        enlace.href = Utils.linkWhatsApp(whatsapp, `Hola, tengo una consulta sobre las reservas en ${nombreComplejo}.`);
         enlace.target = '_blank';
         enlace.rel = 'noopener';
         enlace.setAttribute('aria-label', 'Consultas por WhatsApp');
         enlace.title = 'Consultas por WhatsApp';
-        enlace.innerHTML = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" fill="currentColor"><path d="M4 3h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9.5L5 21.500V18H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm4 6.500a1.200 1.200 0 1 0 0 2.400 1.200 1.200 0 0 0 0-2.400Zm4 0a1.200 1.200 0 1 0 0 2.400 1.200 1.200 0 0 0 0-2.400Zm4 0a1.200 1.200 0 1 0 0 2.400 1.200 1.200 0 0 0 0-2.400Z"/></svg>';
+        enlace.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" fill="currentColor"><path d="M12.04 2a9.9 9.9 0 0 0-8.5 15l-1.4 5 5.1-1.3A9.9 9.9 0 1 0 12.04 2Zm0 18.1a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3a8.2 8.2 0 1 1 6.9 3.8Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.3-.4.7-1.4.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.7 11.8 11.8 0 0 0 4.5 4c1.7.7 2.4.8 3.2.7a2.8 2.8 0 0 0 1.8-1.3 2.3 2.3 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3Z"/></svg>';
         document.body.appendChild(enlace);
     }
 
@@ -176,5 +183,49 @@ const UI = (() => {
         montarWhatsapp();
     }
 
-    return { modal, alerta, confirmar, toast, iniciarPagina, montarEncabezado };
+    function errorConexion(mensaje) {
+        const main = document.getElementById('contenido');
+        if (!main) return;
+        main.hidden = false;
+        main.innerHTML = `<div class="estado-vacio"><div class="estado-icono" aria-hidden="true">⚠</div>
+            <h1>No pudimos cargar la página</h1><p class="muted">${Utils.esc(mensaje)}</p>
+            <button type="button" class="btn" onclick="location.reload()">Reintentar</button></div>`;
+    }
+
+    // Arranque común: carga configuración y sesión, arma encabezado/pie y ejecuta la página.
+    async function arrancar(pagina, fn) {
+        try {
+            await Promise.all([Config.cargar(), Auth.iniciar()]);
+        } catch (error) {
+            console.error(error);
+            errorConexion(error.message || 'Revisá tu conexión a internet.');
+            return;
+        }
+        document.title = document.title.replace(/Un Show Más/g, Config.get().nombreComplejo);
+        iniciarPagina(pagina);
+        try {
+            await fn();
+        } catch (error) {
+            console.error(error);
+            toast(error.message || 'Ocurrió un error inesperado.', 'error');
+        }
+    }
+
+    // Ejecuta una acción asincrónica con el botón deshabilitado y un texto de espera.
+    async function conBoton(boton, textoOcupado, tarea) {
+        if (!boton) return tarea();
+        const original = boton.innerHTML;
+        boton.disabled = true;
+        boton.setAttribute('aria-busy', 'true');
+        boton.textContent = textoOcupado;
+        try { return await tarea(); } finally {
+            if (document.contains(boton)) {
+                boton.disabled = false;
+                boton.removeAttribute('aria-busy');
+                boton.innerHTML = original;
+            }
+        }
+    }
+
+    return { modal, alerta, confirmar, toast, iniciarPagina, montarEncabezado, arrancar, conBoton };
 })();

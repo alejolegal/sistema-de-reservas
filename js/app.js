@@ -1,63 +1,95 @@
-// js/app.js - Página principal: catálogo de canchas y flujo de reserva.
+// js/app.js - Página principal: elegir cancha, día y horario, y pagar la seña.
 
 (() => {
     const seleccion = {}; // { [canchaId]: { fecha, hora, horas } }
-    const feeds = {};     // temporizadores del carrusel "reservas del día", uno por cancha
+    const feeds = {};
+    let ctx = null;
+    let cargando = false;
 
-    document.addEventListener('DOMContentLoaded', () => {
-        UI.iniciarPagina('inicio');
+    document.addEventListener('DOMContentLoaded', () => UI.arrancar('inicio', iniciar));
+
+    async function iniciar() {
+        Config.cargarEstadoServidor().then(renderReglas);
         renderHero();
         renderPanelUsuario();
         renderBannerPromo();
         renderReglas();
         renderCatalogo();
+        await refrescar();
 
         document.getElementById('catalogo-canchas').addEventListener('click', alHacerClic);
-        // Refresca los horarios cada minuto (turnos que vencen, transferencias liberadas).
-        setInterval(() => Config.canchasActivas().forEach((c) => actualizarCard(c.id)), 60000);
-    });
+        setInterval(refrescar, 30000);
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refrescar(); });
+    }
 
-    // ---------- Secciones estáticas ----------
+    // Trae la ocupación real de la base y redibuja las tarjetas.
+    async function refrescar() {
+        if (cargando) return;
+        cargando = true;
+        try {
+            const hoy = Utils.hoyISO();
+            ctx = await Booking.cargarContexto(hoy, Utils.sumarDias(hoy, Config.get().diasAnticipacion - 1));
+            Config.canchasActivas().forEach((c) => actualizarCard(c.id));
+        } catch (error) {
+            UI.toast(error.message, 'error');
+        } finally {
+            cargando = false;
+        }
+    }
+
+    // ---------- Secciones fijas ----------
     function renderHero() {
-        document.getElementById('hero-nombre').textContent = Config.get().nombreComplejo;
+        const cfg = Config.get();
+        document.getElementById('hero-nombre').textContent = cfg.nombreComplejo;
+        const tipos = [...new Set(Config.canchasActivas().map((c) => c.tipo).filter(Boolean))];
+        if (tipos.length) document.getElementById('hero-sub').textContent = `${tipos.join(', ')}. Elegí el día, tocá un horario libre y asegurá tu turno en un minuto.`;
+        const aviso = document.getElementById('aviso-publico');
+        aviso.hidden = !cfg.avisoPublico;
+        aviso.textContent = cfg.avisoPublico;
     }
 
     function renderPanelUsuario() {
         const panel = document.getElementById('panel-usuario');
-        const usuario = Auth.usuarioActual();
+        const usuario = Auth.usuario();
         panel.hidden = !usuario;
         if (!usuario) return;
         panel.innerHTML = `
             <div>
-                <p class="user-name">Hola, <strong>${Utils.esc(usuario.nombre)}</strong>${Auth.esStaff(usuario) ? ` <span class="role-badge">${Utils.esc(usuario.rol)}</span>` : ''}</p>
-                <p class="user-points">Tus puntos acumulados: <strong>${usuario.puntos || 0} pts</strong></p>
+                <p class="user-name">Hola, <strong>${Utils.esc(usuario.nombre.split(' ')[0])}</strong>${Auth.esStaff() ? ` <span class="role-badge">${usuario.rol === 'duenio' ? 'Dueño' : 'Empleado'}</span>` : ''}</p>
+                <p class="user-points">Tenés <strong>${Utils.numero(usuario.puntos)} puntos</strong></p>
             </div>
             <div class="user-actions">
                 <a href="perfil.html" class="btn btn-secundario">Mis reservas</a>
-                ${Auth.esStaff(usuario) ? '<a href="admin.html" class="btn">Panel de gestión</a>' : ''}
+                ${Auth.esStaff() ? '<a href="admin.html" class="btn">Panel de gestión</a>' : ''}
             </div>`;
     }
 
     function renderBannerPromo() {
         const cfg = Config.get();
-        const contenedor = document.getElementById('aviso-promo');
         const activa = cfg.descuentoActivo && cfg.descuentoSegundaHora > 0 && cfg.maxHorasReserva >= 2;
-        contenedor.innerHTML = activa
-            ? `<div class="banner-promo"><strong>Promoción vigente:</strong> alquilá 2 horas seguidas y obtené <span class="chip-promo">${cfg.descuentoSegundaHora}% de descuento</span> en la segunda hora.</div>`
+        document.getElementById('aviso-promo').innerHTML = activa
+            ? `<div class="banner-promo"><strong>Promo:</strong> reservá 2 horas seguidas y la segunda tiene <span class="chip-promo">${cfg.descuentoSegundaHora}% OFF</span></div>`
             : '';
     }
 
     function renderReglas() {
         const cfg = Config.get();
-        const pago = cfg.pagoMercadoPago && cfg.pagoTransferencia
-            ? `Con Mercado Pago el turno queda confirmado al instante. Si elegís transferencia, tenés ${cfg.minutosRetencionTransferencia} minutos para enviar el comprobante; si no, el turno se libera solo.`
-            : cfg.pagoTransferencia
-                ? `Transferí la seña al alias indicado y enviá el comprobante dentro de los ${cfg.minutosRetencionTransferencia} minutos; si no, el turno se libera solo.`
-                : 'El turno queda confirmado al instante al pagar la seña con Mercado Pago.';
+        const demo = Config.servidor().modoPago === 'demo';
+        const pago = cfg.pagoMercadoPago
+            ? `Pagás la seña con Mercado Pago (tarjeta, débito o dinero en cuenta) y el turno queda confirmado al instante.${demo ? ' <span class="chip-demo">Modo demostración: no se cobra dinero real</span>' : ''}`
+            : `Transferí la seña y mandá el comprobante dentro de los ${cfg.minutosRetencionTransferencia} minutos.`;
+        const reembolso = cfg.politicaReembolso === 'reembolso'
+            ? `Si cancelás hasta ${cfg.limiteHorasCancelacion} horas antes, <strong>te devolvemos la seña</strong> automáticamente.`
+            : `Podés cancelar hasta ${cfg.limiteHorasCancelacion} horas antes para liberar el horario (la seña no se devuelve).`;
         document.getElementById('lista-reglas').innerHTML = `
-            <li><strong>Seña obligatoria de ${Utils.moneda(cfg.montoSenia)}.</strong> ${pago}</li>
-            <li><strong>Cancelaciones:</strong> podés cancelar sin penalidad hasta ${cfg.limiteHorasCancelacion} horas antes del partido desde <em>Mi perfil</em>.</li>
-            <li><strong>Puntualidad:</strong> llegá 10 minutos antes para agilizar el ingreso. Cada hora reservada suma ${cfg.puntosPorHora} puntos.</li>`;
+            <li><strong>Seña de ${Utils.moneda(cfg.montoSenia)}.</strong> ${pago} El resto se paga en la cancha.</li>
+            <li><strong>Cancelaciones:</strong> ${reembolso} Se hace desde <a href="perfil.html">Mis reservas</a>.</li>
+            ${cfg.puntosPorHora > 0 ? `<li><strong>Sumá puntos:</strong> con <a href="login.html?tab=registro">tu cuenta</a> cada hora suma ${cfg.puntosPorHora} puntos.</li>` : ''}`;
+        const fijo = document.getElementById('cta-fijo');
+        if (cfg.whatsapp) {
+            fijo.hidden = false;
+            fijo.querySelector('a').href = Utils.linkWhatsApp(cfg.whatsapp, `Hola, quiero un turno fijo semanal en ${cfg.nombreComplejo}.`);
+        }
     }
 
     // ---------- Catálogo ----------
@@ -72,89 +104,83 @@
     function renderCatalogo() {
         const contenedor = document.getElementById('catalogo-canchas');
         const canchas = Config.canchasActivas();
-
         if (!canchas.length) {
             contenedor.innerHTML = '<p class="vacio">Por el momento no hay canchas disponibles para reservar. Escribinos por WhatsApp.</p>';
             return;
         }
-        contenedor.innerHTML = canchas.map((c) => `<article class="cancha-card" data-cancha="${Utils.esc(c.id)}"></article>`).join('');
-        canchas.forEach((c) => actualizarCard(c.id));
+        contenedor.innerHTML = canchas.map((c) => `
+            <article class="cancha-card" data-cancha="${Utils.esc(c.id)}">
+                <div class="cancha-head"><span class="chip">${Utils.esc(c.tipo)}</span><h3>${Utils.esc(c.nombre)}</h3></div>
+                <div class="cancha-body"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton corto"></div></div>
+            </article>`).join('');
     }
 
     function actualizarCard(canchaId, enfocar = null) {
         const tarjeta = document.querySelector(`[data-cancha="${CSS.escape(canchaId)}"]`);
         const cancha = Config.canchaPorId(canchaId);
-        if (!tarjeta || !cancha) return;
-
+        if (!tarjeta || !cancha || !ctx) return;
         const indice = Config.canchasActivas().findIndex((c) => c.id === canchaId);
         const scroll = tarjeta.querySelector('.dias-slider')?.scrollLeft || 0;
         const { html, itemsFeed } = htmlCard(cancha, indice);
-
         tarjeta.innerHTML = html;
         const slider = tarjeta.querySelector('.dias-slider');
         if (slider) slider.scrollLeft = scroll;
         iniciarFeed(canchaId, itemsFeed);
-
         if (enfocar) tarjeta.querySelector(enfocar)?.focus();
     }
 
     function htmlCard(cancha, indice) {
         const cfg = Config.get();
         const s = estadoDe(cancha.id);
-        const ctx = Booking.contexto();
         const hoy = Utils.hoyISO();
-        const cerrado = ctx.cerradas.includes(s.fecha);
+        const cerrado = ctx.cerradas.has(s.fecha);
 
-        // Días
+        if (s.hora !== null && Booking.estadoHora(ctx, cancha.id, s.fecha, s.hora) !== 'libre') s.hora = null;
+
         const dias = Array.from({ length: cfg.diasAnticipacion }, (_, i) => {
             const iso = Utils.sumarDias(hoy, i);
             const etiqueta = i === 0 ? 'Hoy' : i === 1 ? 'Mañana' : Utils.fechaCorta(iso);
-            const clases = ['btn-dia', iso === s.fecha ? 'active' : '', ctx.cerradas.includes(iso) ? 'cerrado' : ''].join(' ');
-            return `<button type="button" class="${clases}" data-action="dia" data-fecha="${iso}" aria-pressed="${iso === s.fecha}"${ctx.cerradas.includes(iso) ? ' title="Complejo cerrado"' : ''}>${etiqueta}</button>`;
+            const libres = ctx.cerradas.has(iso) ? 0 : Config.horarios().filter((h) => Booking.estadoHora(ctx, cancha.id, iso, h) === 'libre').length;
+            const clases = ['btn-dia', iso === s.fecha ? 'active' : '', ctx.cerradas.has(iso) ? 'cerrado' : '', !libres && !ctx.cerradas.has(iso) ? 'lleno' : ''].join(' ');
+            const pie = ctx.cerradas.has(iso) ? 'Cerrado' : libres ? `${libres} libres` : 'Completo';
+            return `<button type="button" class="${clases}" data-action="dia" data-fecha="${iso}" aria-pressed="${iso === s.fecha}">${etiqueta}<small>${pie}</small></button>`;
         }).join('');
 
-        // Horarios
-        const elegidas = s.hora ? (Booking.horasConsecutivas(s.hora, s.horas) || [s.hora]) : [];
-        const horarios = Config.horarios().map((hora) => {
-            const estado = Booking.estadoHora(ctx, cancha.id, s.fecha, hora);
+        const elegidas = s.hora !== null ? (Booking.horasConsecutivas(s.hora, s.horas) || [s.hora]) : [];
+        const horarios = Config.horarios().map((h) => {
+            const estado = Booking.estadoHora(ctx, cancha.id, s.fecha, h);
+            const hora = Utils.hhmm(h);
             if (estado === 'libre') {
-                const marcado = elegidas.includes(hora);
-                return `<button type="button" class="slot libre${marcado ? ' seleccionado' : ''}" data-action="hora" data-hora="${hora}" aria-pressed="${marcado}">${hora}</button>`;
+                const marcado = elegidas.includes(h);
+                return `<button type="button" class="slot libre${marcado ? ' seleccionado' : ''}" data-action="hora" data-hora="${h}" aria-pressed="${marcado}">${hora}</button>`;
             }
-            const texto = estado === 'ocupado' ? 'Ocupado' : 'No disponible';
+            const texto = { ocupado: 'Ocupado', fijo: 'Turno fijo', reservando: 'Reservando', vencido: 'Pasó', cerrado: 'Cerrado' }[estado];
             return `<button type="button" class="slot ${estado}" disabled aria-label="${hora}, ${texto}">${hora}<small>${texto}</small></button>`;
         }).join('');
 
-        // Duración
         let duracion = '';
         if (cfg.maxHorasReserva > 1) {
-            const opciones = Array.from({ length: cfg.maxHorasReserva }, (_, i) => {
+            duracion = `<p class="etiqueta-campo">¿Cuánto tiempo?</p><div class="duracion">${Array.from({ length: cfg.maxHorasReserva }, (_, i) => {
                 const n = i + 1;
-                const promo = cfg.descuentoActivo && n === 2 && cfg.descuentoSegundaHora > 0 ? ` <em>-${cfg.descuentoSegundaHora}% 2.ª hora</em>` : '';
+                const promo = cfg.descuentoActivo && n === 2 && cfg.descuentoSegundaHora > 0 ? `<em>2.ª hora -${cfg.descuentoSegundaHora}%</em>` : '';
                 return `<button type="button" class="opcion-duracion${s.horas === n ? ' active' : ''}" data-action="horas" data-horas="${n}" aria-pressed="${s.horas === n}">${n} ${n === 1 ? 'hora' : 'horas'}${promo}</button>`;
-            }).join('');
-            duracion = `<p class="etiqueta-campo">Duración del turno</p><div class="duracion">${opciones}</div>`;
+            }).join('')}</div>`;
         }
 
-        // Feed social (nombre abreviado por privacidad)
-        const usuarios = Store.usuarios();
-        const delDia = ctx.reservas.filter((r) => r.estado === 'activa' && r.canchaId === cancha.id && r.fecha === s.fecha);
-        const itemsFeed = delDia.map((r) => {
-            const u = usuarios.find((x) => x.id === r.usuarioId);
-            const nombre = Utils.nombreCorto(u ? u.nombre : r.cliente?.nombre);
-            return `<div class="feed-item"><span class="avatar" aria-hidden="true">${Utils.esc(nombre.charAt(0))}</span><span><strong>${Utils.esc(nombre)}</strong> juega a las <strong>${Booking.rangoHorario(r).split(' a ')[0]} hs</strong></span></div>`;
-        });
-        const feed = itemsFeed.length
-            ? `<div class="feed" data-feed>${itemsFeed[0]}</div>`
-            : '<div class="feed feed-vacio">Todavía no hay turnos reservados este día</div>';
+        const delDia = ctx.ocupacion.filter((o) => o.cancha_id === cancha.id && o.fecha === s.fecha && o.estado === 'confirmada' && o.nombre_corto)
+            .sort((a, b) => a.hora_inicio - b.hora_inicio);
+        const itemsFeed = delDia.map((o) => `<div class="feed-item"><span class="avatar" aria-hidden="true">${Utils.esc(o.nombre_corto.charAt(0))}</span><span><strong>${Utils.esc(o.nombre_corto)}</strong> juega a las <strong>${Utils.hhmm(o.hora_inicio)} hs</strong></span></div>`);
+        const libresHoy = Config.horarios().filter((h) => Booking.estadoHora(ctx, cancha.id, s.fecha, h) === 'libre').length;
+        const feed = itemsFeed.length ? `<div class="feed" data-feed aria-live="off">${itemsFeed[0]}</div>`
+            : `<div class="feed feed-vacio">${libresHoy ? '¡Todavía está todo libre este día!' : 'No quedan horarios este día'}</div>`;
 
         const cuerpo = cerrado
-            ? `<div class="aviso-cerrado"><strong>Complejo cerrado</strong><p>No hay alquileres disponibles para esta fecha (feriado o mantenimiento). Elegí otro día.</p></div>`
-            : `<p class="etiqueta-campo">Horarios disponibles</p>
-               <div class="horarios-grid">${horarios}</div>
+            ? `<div class="aviso-cerrado"><strong>Complejo cerrado</strong><p>${Utils.esc(ctx.cerradas.get(s.fecha) || 'No hay alquileres este día.')} Elegí otra fecha.</p></div>`
+            : `<p class="etiqueta-campo">Horarios · ${Utils.esc(Utils.fechaAmigable(s.fecha))}</p>
+               ${libresHoy ? `<div class="horarios-grid">${horarios}</div>` : `<div class="horarios-grid">${horarios}</div><p class="hint centrado">Este día está completo. Probá otro día.</p>`}
                ${duracion}
                ${htmlResumen(cancha, s)}
-               <button type="button" class="btn btn-block" data-action="reservar"${s.hora ? '' : ' disabled'}>${s.hora ? 'Reservar este turno' : 'Elegí un horario'}</button>`;
+               <button type="button" class="btn btn-block btn-reservar" data-action="reservar"${s.hora !== null ? '' : ' disabled'}>${s.hora !== null ? 'Reservar este turno' : 'Tocá un horario libre'}</button>`;
 
         const html = `
             <div class="cancha-head tema-${indice % 3}">
@@ -163,7 +189,6 @@
                 <p class="price">${Utils.moneda(cancha.precioHora)}<span> por hora</span></p>
             </div>
             <div class="cancha-body">
-                <p class="senia-info">Seña para reservar: <strong>${Utils.moneda(cfg.montoSenia)}</strong></p>
                 ${feed}
                 <p class="etiqueta-campo">Elegí el día</p>
                 <div class="dias-slider" role="group" aria-label="Días disponibles">${dias}</div>
@@ -173,20 +198,18 @@
     }
 
     function htmlResumen(cancha, s) {
-        if (!s.hora) return '<p class="resumen resumen-vacio">Tocá un horario libre para ver el precio.</p>';
-        const horas = Booking.horasConsecutivas(s.hora, s.horas) || [s.hora];
-        const precio = Booking.calcularPrecio(cancha, horas.length);
-        const rango = Booking.rangoHorario({ horas });
+        if (s.hora === null) return '';
+        const tramo = Booking.horasConsecutivas(s.hora, s.horas) || [s.hora];
+        const p = Booking.calcularPrecio(cancha, tramo.length);
         return `
             <dl class="resumen">
-                <div><dt>Turno</dt><dd>${Utils.fechaLarga(s.fecha)}, ${rango}</dd></div>
-                <div><dt>Total${precio.descuento ? ' (con descuento)' : ''}</dt><dd>${Utils.moneda(precio.total)}</dd></div>
-                <div><dt>Seña a pagar ahora</dt><dd>${Utils.moneda(precio.senia)}</dd></div>
-                <div><dt>Resto, en la cancha</dt><dd>${Utils.moneda(precio.saldo)}</dd></div>
+                <div><dt>Turno</dt><dd>${Booking.rango({ hora_inicio: tramo[0], horas: tramo.length })}</dd></div>
+                <div><dt>Total${p.descuento ? ' <span class="chip-promo chico">promo</span>' : ''}</dt><dd>${Utils.moneda(p.total)}</dd></div>
+                <div><dt>Seña ahora</dt><dd>${Utils.moneda(p.senia)}</dd></div>
+                <div><dt>Resto en la cancha</dt><dd>${Utils.moneda(p.saldo)}</dd></div>
             </dl>`;
     }
 
-    // Un solo temporizador por tarjeta: se limpia antes de cada renderizado.
     function iniciarFeed(canchaId, items) {
         clearInterval(feeds[canchaId]);
         if (items.length < 2) return;
@@ -203,7 +226,7 @@
     // ---------- Interacción ----------
     function alHacerClic(evento) {
         const boton = evento.target.closest('[data-action]');
-        if (!boton || boton.disabled) return;
+        if (!boton || boton.disabled || !ctx) return;
         const canchaId = boton.closest('[data-cancha]').dataset.cancha;
         const s = estadoDe(canchaId);
         const accion = boton.dataset.action;
@@ -213,176 +236,165 @@
             s.hora = null;
             actualizarCard(canchaId, `[data-action="dia"][data-fecha="${s.fecha}"]`);
         } else if (accion === 'hora') {
-            elegirHora(canchaId, s, boton.dataset.hora);
+            const hora = Number(boton.dataset.hora);
+            if (s.hora === hora) {
+                s.hora = null;
+            } else {
+                const v = Booking.validarSeleccion(ctx, { canchaId, fecha: s.fecha, hora, horas: s.horas });
+                if (!v.ok) {
+                    UI.toast(s.horas > 1 ? `Desde las ${Utils.hhmm(hora)} no hay ${s.horas} horas seguidas libres. Probá con 1 hora u otro horario.` : v.mensaje, 'aviso');
+                    return;
+                }
+                s.hora = hora;
+            }
+            actualizarCard(canchaId, `[data-action="hora"][data-hora="${hora}"]`);
+            if (s.hora !== null) document.querySelector(`[data-cancha="${CSS.escape(canchaId)}"] .btn-reservar`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         } else if (accion === 'horas') {
-            elegirDuracion(canchaId, s, Number(boton.dataset.horas));
+            const horas = Number(boton.dataset.horas);
+            s.horas = horas;
+            if (s.hora !== null && !Booking.validarSeleccion(ctx, { canchaId, fecha: s.fecha, hora: s.hora, horas }).ok) {
+                UI.toast(`Desde las ${Utils.hhmm(s.hora)} no hay ${horas} horas seguidas libres. Elegí otro horario.`, 'aviso');
+                s.hora = null;
+            }
+            actualizarCard(canchaId, `[data-action="horas"][data-horas="${horas}"]`);
         } else if (accion === 'reservar') {
             abrirReserva(canchaId);
         }
     }
 
-    function elegirHora(canchaId, s, hora) {
-        if (s.hora === hora) {
-            s.hora = null;
-        } else {
-            const v = Booking.validarSeleccion(Booking.contexto(), { canchaId, fecha: s.fecha, hora, cantidadHoras: s.horas });
-            if (!v.ok) {
-                UI.toast(s.horas > 1 ? `No se pueden reservar ${s.horas} horas seguidas desde las ${hora}. ${v.mensaje}` : v.mensaje, 'aviso');
-                return;
-            }
-            s.hora = hora;
-        }
-        actualizarCard(canchaId, `[data-action="hora"][data-hora="${hora}"]`);
-    }
-
-    function elegirDuracion(canchaId, s, horas) {
-        s.horas = horas;
-        if (s.hora) {
-            const v = Booking.validarSeleccion(Booking.contexto(), { canchaId, fecha: s.fecha, hora: s.hora, cantidadHoras: horas });
-            if (!v.ok) {
-                UI.toast(`Ese horario no admite ${horas} horas seguidas. ${v.mensaje} Elegí otro horario.`, 'aviso');
-                s.hora = null;
-            }
-        }
-        actualizarCard(canchaId, `[data-action="horas"][data-horas="${horas}"]`);
-    }
-
     // ---------- Reserva y pago ----------
     function abrirReserva(canchaId) {
-        const usuario = Auth.usuarioActual();
-        if (!usuario) {
-            UI.modal({
-                titulo: 'Ingresá para reservar',
-                cuerpo: '<p>Para reservar necesitás una cuenta. Es gratis y toma menos de un minuto; además sumás puntos con cada turno.</p>',
-                botones: [
-                    { texto: 'Ahora no', clase: 'btn-secundario' },
-                    { texto: 'Ingresar o crear cuenta', accion: () => { location.href = 'login.html?next=index.html'; return false; } }
-                ]
-            });
-            return;
-        }
-
         const cfg = Config.get();
         const s = estadoDe(canchaId);
-        const validacion = Booking.validarSeleccion(Booking.contexto(), { canchaId, fecha: s.fecha, hora: s.hora, cantidadHoras: s.horas });
-        if (!validacion.ok) {
-            UI.alerta('No se puede reservar', Utils.esc(validacion.mensaje));
-            s.hora = null;
-            actualizarCard(canchaId);
-            return;
-        }
+        const v = Booking.validarSeleccion(ctx, { canchaId, fecha: s.fecha, hora: s.hora, horas: s.horas });
+        if (!v.ok) { UI.alerta('No se puede reservar', Utils.esc(v.mensaje)); s.hora = null; actualizarCard(canchaId); return; }
         if (!cfg.pagoMercadoPago && !cfg.pagoTransferencia) {
-            UI.alerta('Reservas online no disponibles', 'Por el momento no hay medios de pago habilitados. Escribinos por WhatsApp para reservar.');
+            UI.alerta('Reservas online pausadas', 'Por el momento reservamos solo por WhatsApp.');
+            return;
+        }
+        if (Config.servidor().modoPago === 'sin_servidor') {
+            UI.alerta('Sin conexión con el servidor', 'No pudimos conectar con el sistema de pagos. Probá de nuevo en unos minutos o escribinos por WhatsApp.');
             return;
         }
 
-        const cancha = validacion.cancha;
-        const precio = Booking.calcularPrecio(cancha, validacion.horas.length);
-        const rango = Booking.rangoHorario({ horas: validacion.horas });
-        const primero = cfg.pagoMercadoPago ? 'mercadopago' : 'transferencia';
+        const usuario = Auth.usuario();
+        const guardados = Utils.local.leer('datosCliente', {});
+        const p = Booking.calcularPrecio(v.cancha, v.tramo.length);
+        const rango = Booking.rango({ hora_inicio: v.tramo[0], horas: v.tramo.length });
+        const metodos = [cfg.pagoMercadoPago && 'mercadopago', cfg.pagoTransferencia && 'transferencia'].filter(Boolean);
 
-        const metodoMP = cfg.pagoMercadoPago ? `
-            <label class="metodo">
-                <input type="radio" name="metodo" value="mercadopago" ${primero === 'mercadopago' ? 'checked' : ''}>
-                <span><strong>Mercado Pago${cfg.modoPruebaPago ? ' (modo prueba)' : ''}</strong>
-                <small>Tarjeta o dinero en cuenta. El turno queda confirmado al instante.</small></span>
-            </label>` : '';
-        const metodoTR = cfg.pagoTransferencia ? `
-            <label class="metodo">
-                <input type="radio" name="metodo" value="transferencia" ${primero === 'transferencia' ? 'checked' : ''}>
-                <span><strong>Transferencia bancaria</strong>
-                <small>Tenés ${cfg.minutosRetencionTransferencia} minutos para enviar el comprobante por WhatsApp.</small></span>
-            </label>` : '';
-        const pruebas = cfg.modoPruebaPago && cfg.pagoMercadoPago ? `
-            <details class="prueba"><summary>Datos de tarjeta para probar el pago</summary>
-                <p>Tarjeta: <code>5031 7557 3453 0604</code> · Vencimiento: <code>11/30</code> · CVV: <code>123</code></p>
-            </details>` : '';
+        const datos = usuario
+            ? `<div class="quien"><span class="avatar" aria-hidden="true">${Utils.esc(Utils.iniciales(usuario.nombre))}</span><div><strong>${Utils.esc(usuario.nombre)}</strong><br><small>${Utils.esc(usuario.telefono)}</small></div></div>`
+            : `<div class="form-grid compacto">
+                    <div class="field"><label for="r-nombre">Nombre y apellido</label><input type="text" id="r-nombre" autocomplete="name" required maxlength="80" value="${Utils.esc(guardados.nombre || '')}"></div>
+                    <div class="field"><label for="r-tel">WhatsApp</label><input type="tel" id="r-tel" autocomplete="tel" inputmode="numeric" required placeholder="Ej: 3415551234" value="${Utils.esc(guardados.telefono || '')}"></div>
+               </div>
+               <p class="hint">Con característica, sin 0 ni 15. ¿Tenés cuenta? <a href="login.html?next=index.html">Ingresá</a> y sumá puntos.</p>`;
+
+        const opciones = metodos.length > 1 ? `
+            <fieldset class="metodos"><legend>¿Cómo pagás la seña?</legend>
+                <label class="metodo"><input type="radio" name="metodo" value="mercadopago" checked>
+                    <span><strong>Mercado Pago</strong><small>Tarjeta, débito o dinero en cuenta. Se confirma al instante.</small></span></label>
+                <label class="metodo"><input type="radio" name="metodo" value="transferencia">
+                    <span><strong>Transferencia</strong><small>Tenés ${cfg.minutosRetencionTransferencia} min para mandar el comprobante.</small></span></label>
+            </fieldset>` : '';
+
+        const politica = cfg.politicaReembolso === 'reembolso'
+            ? `Si cancelás hasta ${cfg.limiteHorasCancelacion} hs antes, te devolvemos la seña.`
+            : `La seña no se devuelve si cancelás.`;
 
         UI.modal({
-            titulo: 'Confirmá tu reserva',
+            titulo: 'Confirmá tu turno',
             cuerpo: `
-                <p class="modal-cancha">${Utils.esc(cancha.nombre)}</p>
+                <div class="ticket-mini">
+                    <strong>${Utils.esc(v.cancha.nombre)}</strong>
+                    <span>${Utils.esc(Utils.fechaAmigable(s.fecha))}${Utils.diferenciaDias(Utils.hoyISO(), s.fecha) > 1 ? '' : ` (${Utils.esc(Utils.fechaCorta(s.fecha))})`} · ${rango}</span>
+                </div>
+                ${datos}
                 <dl class="resumen">
-                    <div><dt>Turno</dt><dd>${Utils.fechaLarga(s.fecha)}, ${rango}</dd></div>
-                    <div><dt>Total</dt><dd>${Utils.moneda(precio.total)}</dd></div>
-                    <div><dt>Seña a pagar ahora</dt><dd>${Utils.moneda(precio.senia)}</dd></div>
-                    <div><dt>Resto, en la cancha</dt><dd>${Utils.moneda(precio.saldo)}</dd></div>
+                    <div><dt>Total del turno</dt><dd>${Utils.moneda(p.total)}</dd></div>
+                    <div><dt>Seña a pagar ahora</dt><dd class="destacado">${Utils.moneda(p.senia)}</dd></div>
+                    <div><dt>Resto, en la cancha</dt><dd>${Utils.moneda(p.saldo)}</dd></div>
                 </dl>
-                <fieldset class="metodos"><legend>¿Cómo querés pagar la seña?</legend>${metodoMP}${metodoTR}</fieldset>
-                ${pruebas}`,
+                ${opciones}
+                <p class="hint">${politica}</p>
+                <p id="r-error" class="error-msg" role="alert" hidden></p>`,
             botones: [
                 { texto: 'Volver', clase: 'btn-secundario' },
                 {
-                    texto: `Pagar seña ${Utils.moneda(precio.senia)}`,
-                    accion: (ctl) => {
-                        const metodo = ctl.el.querySelector('input[name="metodo"]:checked')?.value || primero;
-                        ctl.cerrar();
-                        procesarReserva({ canchaId, fecha: s.fecha, hora: s.hora, cantidadHoras: validacion.horas.length, metodo, usuario });
-                        return false;
-                    }
+                    texto: metodos[0] === 'mercadopago' ? `Pagar ${Utils.moneda(p.senia)} con Mercado Pago` : 'Reservar y transferir',
+                    clase: metodos[0] === 'mercadopago' ? 'btn-mp' : '',
+                    accion: (ctl, boton) => confirmar(ctl, boton, { canchaId, fecha: s.fecha, hora: s.hora, horas: v.tramo.length })
                 }
             ]
         });
     }
 
-    async function procesarReserva({ canchaId, fecha, hora, cantidadHoras, metodo, usuario }) {
-        if (metodo === 'mercadopago') {
-            // TODO (backend): crear la preferencia de Checkout Pro en un servidor con el Access Token
-            // en variables de entorno, redirigir a init_point y confirmar la reserva desde el webhook.
-            const proceso = UI.modal({
-                titulo: 'Procesando el pago',
-                cuerpo: '<div class="spinner" aria-hidden="true"></div><p class="centrado">Conectando con Mercado Pago…</p>',
-                cerrable: false
-            });
-            await Utils.esperar(1400);
-            proceso.cerrar();
-        }
+    async function confirmar(ctl, boton, turno) {
+        const usuario = Auth.usuario();
+        const error = ctl.el.querySelector('#r-error');
+        const metodo = ctl.el.querySelector('input[name="metodo"]:checked')?.value || (Config.get().pagoMercadoPago ? 'mercadopago' : 'transferencia');
+        const nombre = usuario ? usuario.nombre : ctl.el.querySelector('#r-nombre').value.trim();
+        const telefono = usuario ? usuario.telefono : Utils.digitos(ctl.el.querySelector('#r-tel').value);
 
-        const resultado = Booking.crearReserva({ usuarioId: usuario.id, canchaId, fecha, hora, cantidadHoras, metodoPago: metodo });
-        estadoDe(canchaId).hora = null;
-        actualizarCard(canchaId);
-        renderPanelUsuario();
-
-        if (!resultado.exito) {
-            UI.alerta('No se pudo completar la reserva', Utils.esc(resultado.mensaje));
-            return;
+        const mostrar = (m) => { error.textContent = m; error.hidden = !m; };
+        if (!usuario) {
+            if (nombre.length < 2 || !nombre.includes(' ')) { mostrar('Escribí tu nombre y apellido.'); ctl.el.querySelector('#r-nombre').focus(); return false; }
+            if (telefono.length < 8 || telefono.length > 13) { mostrar('Revisá el WhatsApp: con característica, sin 0 ni 15 (ej: 3415551234).'); ctl.el.querySelector('#r-tel').focus(); return false; }
+            Utils.local.guardar('datosCliente', { nombre, telefono });
         }
-        mostrarConfirmacion(resultado.reserva, usuario);
+        mostrar('');
+
+        try {
+            const r = await UI.conBoton(boton, 'Reservando…', () => Db.api('reservar', { ...turno, hora: Utils.hhmm(turno.hora), nombre, telefono, metodo }));
+            Booking.recordar(r.reserva.id, r.token);
+            seleccion[turno.canchaId].hora = null;
+            const destino = Booking.linkReserva(r.reserva, r.token);
+
+            if (r.pago.modo === 'mercadopago' && r.pago.url) {
+                ctl.cerrar();
+                UI.modal({ titulo: 'Te llevamos a Mercado Pago', cuerpo: '<div class="spinner" aria-hidden="true"></div><p class="centrado">Tu turno está guardado. Completá el pago para confirmarlo.</p>', cerrable: false });
+                location.href = r.pago.url;
+            } else if (r.pago.modo === 'demo') {
+                ctl.cerrar();
+                pagoDemo(r.reserva, r.token, destino);
+            } else {
+                location.href = destino;
+            }
+        } catch (e) {
+            mostrar(e.message);
+            refrescar();
+        }
+        return false;
     }
 
-    function mostrarConfirmacion(reserva, usuario) {
-        const cfg = Config.get();
-        const detalle = `
-            <dl class="resumen">
-                <div><dt>Cancha</dt><dd>${Utils.esc(reserva.nombreCancha)}</dd></div>
-                <div><dt>Turno</dt><dd>${Utils.fechaLarga(reserva.fecha)}, ${Booking.rangoHorario(reserva)}</dd></div>
-                <div><dt>Resto a pagar en la cancha</dt><dd>${Utils.moneda(reserva.saldoRestante)}</dd></div>
-            </dl>`;
-
-        if (reserva.estado === 'activa') {
-            UI.modal({
-                titulo: '¡Reserva confirmada!',
-                cuerpo: `<div class="ok-mark" aria-hidden="true">✓</div>${detalle}
-                    <p class="muted">Sumaste <strong>${reserva.puntosOtorgados} puntos</strong>. Podés ver o cancelar tu reserva desde <em>Mi perfil</em>.</p>`,
-                botones: [{ texto: 'Entendido' }]
-            });
-            return;
-        }
-
-        const vence = Utils.horaLocal(new Date(reserva.venceEn));
-        const mensaje = `Hola, soy ${usuario.nombre}. Te envío el comprobante de la seña de mi turno del ${Utils.fechaLarga(reserva.fecha)}, ${Booking.rangoHorario(reserva)}, en ${reserva.nombreCancha}.`;
-        const ctl = UI.modal({
-            titulo: 'Turno reservado: falta el pago',
-            cuerpo: `${detalle}
-                <p>Transferí la seña de <strong>${Utils.moneda(reserva.montoSenia)}</strong> a este alias <strong>antes de las ${vence} hs</strong>:</p>
-                <div class="alias-box"><span>${Utils.esc(cfg.alias)}</span><button type="button" class="btn-copiar" data-copiar>Copiar</button></div>
-                <p class="muted">Luego enviá el comprobante por WhatsApp. Si no lo recibimos a tiempo, el turno se libera automáticamente.</p>
-                <a class="btn btn-whatsapp btn-block" href="${Utils.esc(Utils.linkWhatsApp(cfg.whatsapp, mensaje))}" target="_blank" rel="noopener">Enviar comprobante por WhatsApp</a>`,
-            botones: [{ texto: 'Entendido', clase: 'btn-secundario' }]
-        });
-        ctl.el.querySelector('[data-copiar]').addEventListener('click', async (e) => {
-            const copiado = await Utils.copiar(cfg.alias);
-            e.target.textContent = copiado ? '¡Copiado!' : 'Copialo a mano';
+    // Pantalla de pago simulada (solo mientras no esté conectada la cuenta real de Mercado Pago)
+    function pagoDemo(reserva, token, destino) {
+        UI.modal({
+            titulo: 'Pago de demostración',
+            cerrable: false,
+            cuerpo: `
+                <div class="mp-demo">
+                    <div class="mp-demo-marca">Mercado Pago <span>DEMO</span></div>
+                    <p class="mp-demo-monto">${Utils.moneda(reserva.monto_senia)}</p>
+                    <p class="muted centrado">Seña · ${Utils.esc(reserva.cancha_nombre)}</p>
+                </div>
+                <p class="hint centrado">El sistema todavía no tiene conectada la cuenta de Mercado Pago del complejo, así que este pago es <strong>simulado</strong>: no se cobra dinero. Cuando se conecte, acá se abre el checkout real.</p>`,
+            botones: [
+                { texto: 'Abandonar pago', clase: 'btn-secundario', accion: () => { location.href = destino; return false; } },
+                {
+                    texto: 'Simular pago aprobado', clase: 'btn-mp',
+                    accion: async (ctl, boton) => {
+                        try {
+                            await UI.conBoton(boton, 'Procesando…', () => Db.api('pago-demo', { id: reserva.id, token }));
+                            location.href = `${destino}&nuevo=1`;
+                        } catch (e) {
+                            UI.toast(e.message, 'error');
+                        }
+                        return false;
+                    }
+                }
+            ]
         });
     }
 })();

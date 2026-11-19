@@ -1,586 +1,518 @@
-// js/admin.js - Panel de gestión del complejo.
+// js/admin.js - Panel de gestión: núcleo, grilla del día, agenda, detalle de turnos y reservas de mostrador.
+// Los otros módulos (turnos fijos, estadísticas, ajustes) se registran con Admin.registrar().
 
-(() => {
-    let usuario = null;
-    let verTodas = false;
-
-    const ETIQUETAS = {
-        activa: ['Confirmada', 'badge-activa'],
-        pendiente_pago: ['Pendiente de pago', 'badge-pendiente'],
-        cancelada: ['Cancelada', 'badge-cancelada'],
-        completada: ['Jugada', 'badge-completada']
-    };
-    const METODOS = { mercadopago: 'Mercado Pago', transferencia: 'Transferencia', manual: 'Manual' };
+const Admin = (() => {
     const $ = (id) => document.getElementById(id);
+    const modulos = {};
+    let pestanaActual = 'grilla';
+    let fechaGrilla = null;
+    let clientesConocidos = null;
 
-    document.addEventListener('DOMContentLoaded', () => {
-        UI.iniciarPagina('admin');
-        usuario = Auth.requerirStaff();
-        if (!usuario) return;
+    document.addEventListener('DOMContentLoaded', () => UI.arrancar('admin', iniciar));
 
+    async function iniciar() {
+        if (!Auth.requerirStaff()) return;
+        const u = Auth.usuario();
         $('contenido').hidden = false;
-        $('aviso-password').hidden = !usuario.cambiarPassword;
-        $('admin-fecha-hoy').textContent = Utils.fechaLarga(Utils.hoyISO());
+        $('admin-saludo').textContent = `Hola, ${u.nombre.split(' ')[0] || 'equipo'}`;
+        if (!Auth.esDuenio()) document.querySelectorAll('[data-duenio]').forEach((el) => el.remove());
 
-        $('f-fecha').value = Utils.hoyISO();
-        $('rep-desde').value = Utils.sumarDias(Utils.hoyISO(), -30);
-        $('rep-hasta').value = Utils.hoyISO();
-
-        iniciarPestanas();
-        iniciarEventos();
-        refrescarTodo();
-        setInterval(() => { renderKpis(); renderAgenda(); }, 60000);
-    });
-
-    function refrescarTodo() {
-        renderKpis();
+        fechaGrilla = Utils.hoyISO();
+        $('g-fecha').value = fechaGrilla;
+        $('f-desde').value = Utils.hoyISO();
+        $('f-hasta').value = Utils.sumarDias(Utils.hoyISO(), 14);
         renderFiltroCanchas();
-        renderAgenda();
-        renderCierres();
-        renderCanchas();
-        renderFormularios();
-        renderClientes();
-        renderReporte();
+
+        iniciarEventos();
+        iniciarPestanas();
+        avisoModo();
+        refrescar();
+        tiempoReal();
+        setInterval(() => { if (!document.hidden) refrescar(); }, 60000);
+    }
+
+    const registrar = (tab, modulo) => { modulos[tab] = modulo; };
+
+    async function avisoModo() {
+        const s = await Config.cargarEstadoServidor();
+        const aviso = $('aviso-modo');
+        if (s.modoPago === 'demo') {
+            aviso.innerHTML = '<strong>Modo demostración:</strong> los pagos con Mercado Pago son simulados (no se cobra dinero). Para cobrar de verdad hay que conectar la cuenta de Mercado Pago del complejo. <a href="#" data-ir="ajustes">Ver cómo</a>';
+            aviso.hidden = false;
+        } else if (s.credencialesDePrueba) {
+            aviso.innerHTML = '<strong>Mercado Pago en modo prueba:</strong> están cargadas credenciales de prueba (TEST-). Cambialas por las de producción para cobrar de verdad.';
+            aviso.hidden = false;
+        } else if (s.modoPago === 'sin_servidor') {
+            aviso.innerHTML = '<strong>Sin conexión con el servidor de pagos.</strong> Revisá que las variables de entorno estén cargadas en Vercel.';
+            aviso.hidden = false;
+        } else {
+            aviso.hidden = true;
+        }
+    }
+
+    // ---------- Datos ----------
+    const reservasEntre = (desde, hasta, extra = (q) => q) => Db.todas(() =>
+        extra(Db.sb.from('reservas').select('*').gte('fecha', desde).lte('fecha', hasta)).order('fecha').order('hora_inicio'));
+
+    async function refrescar() {
+        await Promise.allSettled([renderKpis(), renderGrilla(), revisarDevoluciones()]);
+        if (pestanaActual !== 'grilla' && modulos[pestanaActual]?.render) modulos[pestanaActual].render();
+    }
+
+    async function revisarDevoluciones() {
+        const pendientes = await Db.q(Db.sb.from('reservas').select('id', { count: 'exact', head: false }).eq('pago_estado', 'reembolso_pendiente'));
+        const aviso = $('aviso-devoluciones');
+        aviso.hidden = !pendientes.length;
+        if (pendientes.length) {
+            aviso.innerHTML = `<strong>${pendientes.length} seña(s) para devolver a mano.</strong> Son pagos que no se pudieron aplicar a un turno. <a href="#" data-ver-devoluciones>Ver cuáles</a>`;
+        }
     }
 
     // ---------- Pestañas ----------
     function iniciarPestanas() {
         const pestanas = Array.from(document.querySelectorAll('.admin-tab'));
-        const activar = (clave) => {
-            pestanas.forEach((t) => {
-                const activa = t.dataset.tab === clave;
-                t.classList.toggle('active', activa);
-                t.setAttribute('aria-selected', String(activa));
-                $(`panel-${t.dataset.tab}`).hidden = !activa;
-            });
-            try { sessionStorage.setItem('adminTab', clave); } catch (_) { /* opcional */ }
-        };
-        pestanas.forEach((t) => t.addEventListener('click', () => activar(t.dataset.tab)));
         let guardada = null;
         try { guardada = sessionStorage.getItem('adminTab'); } catch (_) { /* opcional */ }
-        activar(pestanas.some((t) => t.dataset.tab === guardada) ? guardada : 'agenda');
+        activar(pestanas.some((t) => t.dataset.tab === guardada) ? guardada : 'grilla');
+        pestanas.forEach((t) => t.addEventListener('click', () => activar(t.dataset.tab)));
+    }
+
+    function activar(clave) {
+        pestanaActual = clave;
+        document.querySelectorAll('.admin-tab').forEach((t) => {
+            const activa = t.dataset.tab === clave;
+            t.classList.toggle('active', activa);
+            t.setAttribute('aria-selected', String(activa));
+            $(`panel-${t.dataset.tab}`).hidden = !activa;
+        });
+        try { sessionStorage.setItem('adminTab', clave); } catch (_) { /* opcional */ }
+        if (clave === 'agenda') renderAgenda();
+        else if (modulos[clave]?.render) modulos[clave].render();
     }
 
     // ---------- KPIs ----------
-    function renderKpis() {
+    async function renderKpis() {
         const hoy = Utils.hoyISO();
-        const reservas = Booking.obtenerReservas();
-        const deHoy = reservas.filter((r) => r.fecha === hoy && ['activa', 'completada'].includes(r.estado));
-        const pendientes = reservas.filter((r) => r.estado === 'pendiente_pago');
-        const proximas = reservas.filter((r) => r.estado === 'activa' && r.fecha >= hoy);
-        const horasHoy = deHoy.reduce((s, r) => s + r.cantidadHoras, 0);
+        const reservas = await reservasEntre(hoy, Utils.sumarDias(hoy, 6), (q) => q.in('estado', ['confirmada', 'pendiente_pago']));
+        const deHoy = reservas.filter((r) => r.fecha === hoy && r.estado === 'confirmada');
+        const horasHoy = deHoy.reduce((s, r) => s + r.horas, 0);
         const capacidad = Config.canchasActivas().length * Config.horarios().length;
         const ocupacion = capacidad ? Math.round((horasHoy / capacidad) * 100) : 0;
-        const ingresoHoy = deHoy.reduce((s, r) => s + r.precioTotal, 0);
+        const facturacion = deHoy.reduce((s, r) => s + r.precio_total, 0);
+        const aCobrar = deHoy.filter((r) => !r.saldo_cobrado).reduce((s, r) => s + Booking.saldo(r), 0);
+        const pendientes = reservas.filter((r) => r.estado === 'pendiente_pago').length;
+        const semana = reservas.filter((r) => r.estado === 'confirmada').length;
 
         const kpi = (valor, etiqueta, extra = '') => `<div class="kpi ${extra}"><strong>${valor}</strong><span>${etiqueta}</span></div>`;
         $('kpis').innerHTML =
-            kpi(deHoy.length, 'Turnos de hoy') +
-            kpi(`${ocupacion}%`, 'Ocupación de hoy') +
-            kpi(Utils.moneda(ingresoHoy), 'Facturación de hoy') +
-            kpi(pendientes.length, 'Pagos por confirmar', pendientes.length ? 'kpi-alerta' : '') +
-            kpi(proximas.length, 'Próximos turnos');
+            kpi(deHoy.length, 'Turnos hoy') +
+            kpi(`${ocupacion}%`, 'Ocupación hoy') +
+            kpi(Utils.moneda(facturacion), 'Facturación hoy') +
+            kpi(Utils.moneda(aCobrar), 'Falta cobrar hoy', aCobrar ? 'kpi-info' : '') +
+            kpi(pendientes, 'Esperando pago', pendientes ? 'kpi-alerta' : '') +
+            kpi(semana, 'Turnos próximos 7 días');
+    }
+
+    // ---------- Grilla del día ----------
+    async function renderGrilla() {
+        const fecha = fechaGrilla;
+        $('g-titulo').textContent = `${Utils.fechaAmigable(fecha)}${Utils.fechaAmigable(fecha) === Utils.fechaLarga(fecha) ? '' : ` · ${Utils.fechaLarga(fecha)}`}`;
+        const [reservas, cierre] = await Promise.all([
+            reservasEntre(fecha, fecha, (q) => q.in('estado', ['confirmada', 'pendiente_pago'])),
+            Db.q(Db.sb.from('fechas_cerradas').select('*').eq('fecha', fecha).maybeSingle())
+        ]);
+        const activas = reservas.filter((r) => r.estado === 'confirmada' || !r.vence_en || Date.parse(r.vence_en) > Date.now());
+        const canchas = Config.get().canchas.filter((c) => c.activa || activas.some((r) => r.cancha_id === c.id));
+        const horas = Config.horarios();
+        const ahora = Utils.ahora();
+
+        // Resumen del día
+        const confirmadas = activas.filter((r) => r.estado === 'confirmada');
+        const total = confirmadas.reduce((s, r) => s + r.precio_total, 0);
+        const cobradoSenias = confirmadas.filter(Booking.senaPagada).reduce((s, r) => s + r.monto_senia, 0);
+        const falta = confirmadas.filter((r) => !r.saldo_cobrado).reduce((s, r) => s + Booking.saldo(r), 0);
+        $('g-resumen').innerHTML = cierre
+            ? `<div class="alert alert-error"><strong>Complejo cerrado este día.</strong> ${Utils.esc(cierre.motivo || '')}</div>`
+            : `<span><strong>${confirmadas.length}</strong> turnos</span><span><strong>${Utils.moneda(total)}</strong> facturación</span><span><strong>${Utils.moneda(cobradoSenias)}</strong> en señas online</span><span class="${falta ? 'falta' : ''}"><strong>${Utils.moneda(falta)}</strong> por cobrar en la cancha</span>`;
+
+        if (!canchas.length) { $('grilla').innerHTML = '<p class="vacio">No hay canchas activas.</p>'; return; }
+
+        const cubiertas = new Set();
+        const filas = horas.map((h) => {
+            const pasado = Utils.crearFecha(fecha, h + 1) <= ahora;
+            const actual = Utils.crearFecha(fecha, h) <= ahora && !pasado;
+            const celdas = canchas.map((c) => {
+                const clave = `${c.id}|${h}`;
+                if (cubiertas.has(clave)) return '';
+                const r = activas.find((x) => x.cancha_id === c.id && x.hora_inicio === h);
+                if (r) {
+                    for (let i = 1; i < r.horas; i++) cubiertas.add(`${c.id}|${h + i}`);
+                    return `<td rowspan="${r.horas}" class="celda-turno">${htmlTurno(r)}</td>`;
+                }
+                if (cierre || pasado) return `<td class="celda-libre pasado"><span aria-hidden="true">—</span></td>`;
+                return `<td class="celda-libre"><button type="button" class="btn-libre" data-libre data-cancha="${Utils.esc(c.id)}" data-hora="${h}" aria-label="Reservar ${Utils.esc(c.nombre)} a las ${Utils.hhmm(h)}">+ ${Utils.hhmm(h)}</button></td>`;
+            }).join('');
+            return `<tr class="${actual ? 'hora-actual' : ''}${pasado ? ' hora-pasada' : ''}"><th scope="row">${Utils.hhmm(h)}</th>${celdas}</tr>`;
+        }).join('');
+
+        $('grilla').innerHTML = `<table class="grilla" style="--cols:${canchas.length}">
+            <thead><tr><th scope="col"><span class="sr-only">Hora</span></th>${canchas.map((c) => `<th scope="col">${Utils.esc(c.nombre)}${c.activa ? '' : ' <small>(oculta)</small>'}</th>`).join('')}</tr></thead>
+            <tbody>${filas}</tbody></table>`;
+    }
+
+    function htmlTurno(r) {
+        const chips = [];
+        if (r.estado === 'pendiente_pago') chips.push('<span class="mini mini-ambar">Esperando pago</span>');
+        else if (r.turno_fijo_id) chips.push('<span class="mini mini-azul">Fijo</span>');
+        if (r.estado === 'confirmada' && Booking.senaPagada(r)) chips.push('<span class="mini mini-verde">Seña ✓</span>');
+        if (r.estado === 'confirmada') {
+            chips.push(r.saldo_cobrado ? '<span class="mini mini-verde">Cobrado ✓</span>' : `<span class="mini">Cobrar ${Utils.moneda(Booking.saldo(r))}</span>`);
+        }
+        if (r.asistencia === 'ausente') chips.push('<span class="mini mini-rojo">No vino</span>');
+        return `<button type="button" class="turno estado-${r.estado}${r.turno_fijo_id ? ' es-fijo' : ''}" data-reserva="${Utils.esc(r.id)}">
+            <strong>${Utils.esc(r.cliente_nombre)}</strong>
+            <small>${Booking.rango(r)}</small>
+            <span class="chips">${chips.join('')}</span>
+        </button>`;
     }
 
     // ---------- Agenda ----------
     function renderFiltroCanchas() {
-        const select = $('f-cancha');
-        const actual = select.value;
-        select.innerHTML = '<option value="">Todas</option>' +
-            Config.get().canchas.map((c) => `<option value="${Utils.esc(c.id)}">${Utils.esc(c.nombre)}</option>`).join('');
-        select.value = Array.from(select.options).some((o) => o.value === actual) ? actual : '';
+        $('f-cancha').innerHTML = '<option value="">Todas</option>' + Config.todas().map((c) => `<option value="${Utils.esc(c.id)}">${Utils.esc(c.nombre)}</option>`).join('');
     }
 
-    function renderAgenda() {
-        const fecha = $('f-fecha').value;
+    let agendaPendiente = null;
+    async function renderAgenda() {
+        const desde = $('f-desde').value || Utils.hoyISO();
+        const hasta = $('f-hasta').value || desde;
         const cancha = $('f-cancha').value;
         const estado = $('f-estado').value;
         const texto = $('f-buscar').value.trim().toLowerCase();
-        const usuarios = Store.usuarios();
-        $('btn-todas').textContent = verTodas ? 'Ver solo la fecha elegida' : 'Ver todas las fechas';
-        $('f-fecha').disabled = verTodas;
+        const pedido = Symbol('agenda');
+        agendaPendiente = pedido;
 
-        const filas = Booking.obtenerReservas()
-            .map((r) => {
-                const cliente = r.usuarioId ? usuarios.find((u) => u.id === r.usuarioId) : null;
-                return { r, nombre: cliente ? cliente.nombre : (r.cliente?.nombre || 'Cliente'), telefono: cliente ? cliente.telefono : (r.cliente?.telefono || '') };
-            })
-            .filter(({ r, nombre, telefono }) =>
-                (verTodas || !fecha || r.fecha === fecha) &&
-                (!cancha || r.canchaId === cancha) &&
-                (!estado || r.estado === estado) &&
-                (!texto || nombre.toLowerCase().includes(texto) || telefono.includes(texto)))
-            .sort((a, b) => Booking.inicio(a.r) - Booking.inicio(b.r));
-
-        if (!filas.length) {
-            $('lista-agenda').innerHTML = '<p class="vacio">No hay reservas con estos filtros.</p>';
+        let reservas;
+        try {
+            reservas = estado === 'devolver'
+                ? await Db.q(Db.sb.from('reservas').select('*').eq('pago_estado', 'reembolso_pendiente').order('fecha'))
+                : await reservasEntre(desde, hasta, (q) => (cancha ? q.eq('cancha_id', cancha) : q));
+        } catch (e) {
+            $('lista-agenda').innerHTML = `<p class="vacio">${Utils.esc(e.message)}</p>`;
             return;
         }
+        if (agendaPendiente !== pedido) return;
 
-        const cuerpo = filas.map(({ r, nombre, telefono }) => {
-            const [etiqueta, clase] = ETIQUETAS[r.estado] || [r.estado, ''];
-            const wa = Utils.linkWhatsApp(telefono, `Hola ${nombre}, te escribimos de ${Config.get().nombreComplejo} por tu turno del ${Utils.fechaLarga(r.fecha)}, ${Booking.rangoHorario(r)}.`);
-            const acciones = [];
-            if (r.estado === 'pendiente_pago') acciones.push(`<button type="button" class="btn btn-sm" data-accion="confirmar" data-id="${Utils.esc(r.id)}">Confirmar pago</button>`);
-            if (['activa', 'pendiente_pago'].includes(r.estado)) acciones.push(`<button type="button" class="btn btn-peligro btn-sm" data-accion="cancelar" data-id="${Utils.esc(r.id)}">Cancelar</button>`);
-            if (r.estado === 'cancelada' && Booking.fin(r) > new Date()) acciones.push(`<button type="button" class="btn btn-secundario btn-sm" data-accion="reactivar" data-id="${Utils.esc(r.id)}">Reactivar</button>`);
-            if (wa) acciones.push(`<a class="btn btn-whatsapp btn-sm" href="${Utils.esc(wa)}" target="_blank" rel="noopener">WhatsApp</a>`);
+        const filas = reservas.filter((r) => {
+            if (estado === 'vigentes' && !Booking.vigente(r)) return false;
+            if (estado === 'saldo' && !(r.estado === 'confirmada' && !r.saldo_cobrado && Booking.saldo(r) > 0)) return false;
+            if (['pendiente_pago', 'confirmada', 'cancelada', 'vencida'].includes(estado) && r.estado !== estado) return false;
+            if (texto && ![r.cliente_nombre, r.cliente_telefono, r.codigo, r.cliente_email].some((v) => String(v || '').toLowerCase().includes(texto))) return false;
+            return true;
+        });
 
-            return `<tr>
-                <td data-label="Turno"><strong>${Utils.fechaCorta(r.fecha)}</strong><br>${Booking.rangoHorario(r)}</td>
-                <td data-label="Cancha">${Utils.esc(r.nombreCancha)}</td>
-                <td data-label="Cliente"><strong>${Utils.esc(nombre)}</strong><br><small>${Utils.esc(telefono)}</small></td>
-                <td data-label="Pago">${Utils.moneda(r.precioTotal)}<br><small>Seña ${Utils.moneda(r.montoSenia)} · ${METODOS[r.metodoPago] || '-'}</small></td>
-                <td data-label="Estado"><span class="badge ${clase}">${etiqueta}</span></td>
-                <td data-label="Acciones" class="celda-acciones">${acciones.join('')}</td>
-            </tr>`;
-        }).join('');
-
+        if (!filas.length) { $('lista-agenda').innerHTML = '<p class="vacio">No hay reservas con estos filtros.</p>'; return; }
         $('lista-agenda').innerHTML = `
-            <table class="tabla">
-                <thead><tr><th>Turno</th><th>Cancha</th><th>Cliente</th><th>Pago</th><th>Estado</th><th>Acciones</th></tr></thead>
-                <tbody>${cuerpo}</tbody>
+            <table class="tabla tabla-clic">
+                <thead><tr><th>Turno</th><th>Cancha</th><th>Cliente</th><th>Pago</th><th>Estado</th></tr></thead>
+                <tbody>${filas.map((r) => {
+                    const e = Booking.etiqueta(r);
+                    return `<tr data-reserva="${Utils.esc(r.id)}" tabindex="0">
+                        <td data-label="Turno"><strong>${Utils.esc(Utils.fechaCorta(r.fecha))}</strong><br>${Booking.rango(r)}</td>
+                        <td data-label="Cancha">${Utils.esc(r.cancha_nombre)}</td>
+                        <td data-label="Cliente"><strong>${Utils.esc(r.cliente_nombre)}</strong><br><small>${Utils.esc(r.cliente_telefono)} · ${Utils.esc(r.codigo)}</small></td>
+                        <td data-label="Pago">${Utils.moneda(r.precio_total)}<br><small>${Utils.esc(Booking.METODOS[r.metodo_pago] || '')} · ${Utils.esc(Booking.PAGOS[r.pago_estado] || '')}</small></td>
+                        <td data-label="Estado"><span class="badge ${e.clase}">${e.texto}</span>${r.estado === 'confirmada' && !r.saldo_cobrado && Booking.saldo(r) ? `<br><small>Saldo ${Utils.moneda(Booking.saldo(r))}</small>` : ''}</td>
+                    </tr>`;
+                }).join('')}</tbody>
             </table>`;
     }
 
-    async function accionReserva(accion, id) {
-        const reserva = Booking.obtenerReservas().find((r) => r.id === id);
-        if (!reserva) return;
-        const detalle = `${Utils.esc(reserva.nombreCancha)}, ${Utils.fechaLarga(reserva.fecha)} (${Booking.rangoHorario(reserva)})`;
+    // ---------- Detalle de un turno ----------
+    async function detalle(id) {
+        let r;
+        try { r = await Db.q(Db.sb.from('reservas').select('*').eq('id', id).single()); } catch (e) { UI.toast(e.message, 'error'); return; }
+        const cfg = Config.get();
+        const e = Booking.etiqueta(r);
+        const saldo = Booking.saldo(r);
+        const vigente = Booking.vigente(r);
+        const wa = Utils.linkWhatsApp(r.cliente_telefono, `Hola ${r.cliente_nombre.split(' ')[0]}, te escribimos de ${cfg.nombreComplejo} por tu turno del ${Utils.fechaLarga(r.fecha)} de ${Booking.rango(r)} (${r.cancha_nombre}).`);
+        const link = `${location.origin}/${Booking.linkReserva(r)}`;
 
-        if (accion === 'cancelar') {
-            const ok = await UI.confirmar('¿Cancelar este turno?', `${detalle}<br>El horario quedará libre y se descontarán los puntos otorgados.`, { textoOk: 'Sí, cancelar', textoCancelar: 'Volver', peligro: true });
-            if (!ok) return;
+        const filas = [
+            ['Turno', `${Utils.esc(Utils.fechaLarga(r.fecha))}, ${Booking.rango(r)}`],
+            ['Cancha', Utils.esc(r.cancha_nombre)],
+            ['Cliente', `${Utils.esc(r.cliente_nombre)}${r.cliente_telefono ? `<br><small>${Utils.esc(r.cliente_telefono)}</small>` : ''}${r.cliente_email ? `<br><small>${Utils.esc(r.cliente_email)}</small>` : ''}${r.usuario_id ? ' <span class="mini mini-azul">Con cuenta</span>' : ''}`],
+            ['Total', `${Utils.moneda(r.precio_total)}${r.descuento ? ` <small>(promo -${Utils.moneda(r.descuento)})</small>` : ''}`],
+            ['Seña', `${Utils.moneda(r.monto_senia)} <small>· ${Utils.esc(Booking.METODOS[r.metodo_pago] || '')} · ${Utils.esc(Booking.PAGOS[r.pago_estado] || '')}</small>`],
+            r.estado === 'confirmada' ? ['Resto a cobrar', `<strong>${Utils.moneda(saldo)}</strong>${r.saldo_cobrado ? ' <span class="mini mini-verde">Cobrado ✓</span>' : ''}`] : null,
+            r.mp_payment_id ? ['Pago Mercado Pago', `N.º ${Utils.esc(r.mp_payment_id)}`] : null,
+            r.motivo ? ['Nota del sistema', Utils.esc(r.motivo)] : null,
+            ['Código', `${Utils.esc(r.codigo)} · <small>creada ${Utils.esc(Utils.fechaCorta(Utils.fechaISO(Utils.deInstante(r.creada))))} ${Utils.horaDe(Utils.deInstante(r.creada))}</small>`]
+        ].filter(Boolean);
+
+        const botones = [];
+        if (r.estado === 'pendiente_pago' && r.metodo_pago === 'transferencia') botones.push('<button type="button" class="btn btn-sm" data-acc="confirmar">Confirmar transferencia</button>');
+        if (r.estado === 'pendiente_pago' && r.metodo_pago === 'mercadopago') botones.push('<button type="button" class="btn btn-sm btn-secundario" data-acc="confirmar">Marcar como pagada</button>');
+        if (r.estado === 'confirmada') {
+            botones.push(r.saldo_cobrado
+                ? '<button type="button" class="btn btn-sm btn-secundario" data-acc="saldo-no">Desmarcar cobro</button>'
+                : `<button type="button" class="btn btn-sm btn-verde" data-acc="saldo-si">Cobré el resto (${Utils.moneda(saldo)})</button>`);
+            if (Booking.inicio(r) <= Utils.ahora()) {
+                botones.push(`<button type="button" class="btn btn-sm btn-secundario" data-acc="presente"${r.asistencia === 'presente' ? ' disabled' : ''}>Vinieron ✓</button>`);
+                botones.push(`<button type="button" class="btn btn-sm btn-secundario" data-acc="ausente"${r.asistencia === 'ausente' ? ' disabled' : ''}>No vinieron</button>`);
+            }
         }
-        if (accion === 'confirmar') {
-            const ok = await UI.confirmar('¿Confirmar el pago?', `${detalle}<br>Confirmá que recibiste la seña de ${Utils.moneda(reserva.montoSenia)}.`, { textoOk: 'Sí, confirmar' });
-            if (!ok) return;
+        if (['cancelada', 'vencida'].includes(r.estado) && !Booking.terminada(r)) botones.push('<button type="button" class="btn btn-sm btn-secundario" data-acc="reactivar">Reactivar turno</button>');
+        if (r.pago_estado === 'reembolso_pendiente') botones.push('<button type="button" class="btn btn-sm btn-secundario" data-acc="devuelta">Ya devolví la seña</button>');
+        if (vigente) botones.push('<button type="button" class="btn btn-sm btn-peligro" data-acc="cancelar">Cancelar turno</button>');
+
+        const ctl = UI.modal({
+            titulo: 'Detalle del turno',
+            clase: 'modal-ancho',
+            cuerpo: `
+                <p><span class="badge ${e.clase}">${e.texto}</span>${r.turno_fijo_id ? ' <span class="mini mini-azul">Turno fijo</span>' : ''}</p>
+                <dl class="ticket-datos compacto">${filas.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>
+                ${botones.length ? `<div class="acciones-detalle">${botones.join('')}</div>` : ''}
+                <div class="field"><label for="d-notas">Notas internas (no las ve el cliente)</label><textarea id="d-notas" maxlength="500">${Utils.esc(r.notas || '')}</textarea></div>
+                <div class="acciones-detalle">
+                    ${wa ? `<a class="btn btn-sm btn-whatsapp" href="${Utils.esc(wa)}" target="_blank" rel="noopener">WhatsApp al cliente</a>` : ''}
+                    <button type="button" class="btn btn-sm btn-secundario" data-acc="link">Copiar link del comprobante</button>
+                </div>`,
+            botones: [{ texto: 'Cerrar', clase: 'btn-secundario', accion: async () => { await guardarNotas(r); } }]
+        });
+
+        ctl.el.addEventListener('click', async (ev) => {
+            const b = ev.target.closest('[data-acc]');
+            if (!b) return;
+            const acc = b.dataset.acc;
+            if (acc === 'link') { b.textContent = (await Utils.copiar(link)) ? '¡Copiado!' : link; return; }
+            const ok = await accionTurno(r, acc, b);
+            if (ok) { await guardarNotas(r); ctl.cerrar(); refrescar(); if (pestanaActual === 'agenda') renderAgenda(); }
+        });
+
+        async function guardarNotas(reserva) {
+            const notas = ctl.el.querySelector('#d-notas')?.value ?? reserva.notas;
+            if (notas !== (reserva.notas || '')) {
+                try { await Db.q(Db.sb.from('reservas').update({ notas }).eq('id', reserva.id)); reserva.notas = notas; UI.toast('Nota guardada.'); } catch (err) { UI.toast(err.message, 'error'); }
+            }
         }
-        const resultado = Booking.cambiarEstado(id, accion === 'cancelar' ? 'cancelada' : 'activa', usuario);
-        UI.toast(resultado.mensaje, resultado.exito ? 'ok' : 'error');
-        renderKpis();
-        renderAgenda();
-        renderClientes();
     }
 
-    // ---------- Nueva reserva manual ----------
-    function abrirReservaManual() {
+    async function accionTurno(r, acc, boton) {
+        try {
+            if (acc === 'confirmar' || acc === 'reactivar') {
+                await UI.conBoton(boton, 'Guardando…', () => Db.rpc('staff_confirmar', { p_id: r.id }));
+                UI.toast(acc === 'confirmar' ? 'Pago confirmado. El turno quedó firme.' : 'Turno reactivado.');
+            } else if (acc === 'saldo-si' || acc === 'saldo-no') {
+                await Db.q(Db.sb.from('reservas').update({ saldo_cobrado: acc === 'saldo-si', asistencia: acc === 'saldo-si' ? 'presente' : r.asistencia }).eq('id', r.id));
+                UI.toast(acc === 'saldo-si' ? 'Cobro registrado.' : 'Cobro desmarcado.');
+            } else if (acc === 'presente' || acc === 'ausente') {
+                await Db.q(Db.sb.from('reservas').update({ asistencia: acc }).eq('id', r.id));
+                UI.toast(acc === 'presente' ? 'Asistencia registrada.' : 'Marcado como ausente.');
+            } else if (acc === 'devuelta') {
+                await Db.rpc('staff_marcar_devuelta', { p_id: r.id });
+                UI.toast('Listo, quedó registrada la devolución.');
+            } else if (acc === 'cancelar') {
+                return await cancelarTurno(r);
+            }
+            return true;
+        } catch (e) {
+            UI.alerta('No se pudo completar', Utils.esc(e.message));
+            return false;
+        }
+    }
+
+    function cancelarTurno(r) {
+        return new Promise((resolve) => {
+            const pagada = Booking.senaPagada(r) && r.pago_estado !== 'confirmado_admin';
+            const transferida = r.pago_estado === 'confirmado_admin';
+            UI.modal({
+                titulo: '¿Cancelar este turno?',
+                cuerpo: `<p>${Utils.esc(r.cliente_nombre)} · ${Utils.esc(Utils.fechaLarga(r.fecha))}, ${Booking.rango(r)}. El horario queda libre.</p>
+                    ${pagada ? `<label class="check"><input type="checkbox" id="c-reembolso" checked> Devolver la seña de ${Utils.moneda(r.monto_senia)} por Mercado Pago (automático)</label>` : ''}
+                    ${transferida ? `<p class="hint">La seña fue por transferencia: si corresponde, devolvela a mano.</p>` : ''}
+                    <div class="field"><label for="c-motivo">Motivo (opcional, lo ve el cliente)</label><input type="text" id="c-motivo" maxlength="140" placeholder="Ej: lluvia, cancha en mantenimiento"></div>`,
+                botones: [
+                    { texto: 'Volver', clase: 'btn-secundario', accion: () => { resolve(false); } },
+                    {
+                        texto: 'Cancelar turno', clase: 'btn-peligro',
+                        accion: async (ctl, boton) => {
+                            try {
+                                const res = await UI.conBoton(boton, 'Cancelando…', () => Db.api('cancelar', {
+                                    id: r.id,
+                                    reembolsar: !!ctl.el.querySelector('#c-reembolso')?.checked,
+                                    motivo: ctl.el.querySelector('#c-motivo').value.trim()
+                                }));
+                                UI.toast(res.mensaje);
+                                resolve(true);
+                            } catch (e) {
+                                UI.toast(e.message, 'error');
+                                resolve(false);
+                            }
+                        }
+                    }
+                ],
+                onCerrar: () => resolve(false)
+            });
+        });
+    }
+
+    // ---------- Nueva reserva (mostrador / teléfono) ----------
+    async function cargarClientesConocidos() {
+        if (clientesConocidos) return clientesConocidos;
+        const filas = await Db.q(Db.sb.from('reservas').select('cliente_nombre, cliente_telefono').order('creada', { ascending: false }).limit(1000));
+        const mapa = new Map();
+        filas.forEach((f) => { const k = Utils.claveTelefono(f.cliente_telefono) || f.cliente_nombre.toLowerCase(); if (!mapa.has(k)) mapa.set(k, f); });
+        clientesConocidos = [...mapa.values()];
+        return clientesConocidos;
+    }
+
+    async function nuevaReserva(pre = {}) {
         const canchas = Config.canchasActivas();
         if (!canchas.length) { UI.alerta('Sin canchas', 'Primero activá o agregá una cancha.'); return; }
         const cfg = Config.get();
-        const horarios = Config.horarios();
+        const conocidos = await cargarClientesConocidos().catch(() => []);
+        const fecha = pre.fecha || fechaGrilla || Utils.hoyISO();
 
         const ctl = UI.modal({
-            titulo: 'Nueva reserva (mostrador o teléfono)',
+            titulo: 'Nueva reserva',
             clase: 'modal-ancho',
             cuerpo: `
                 <form id="form-manual" class="form-grid" novalidate>
-                    <div class="field"><label for="m-nombre">Nombre del cliente</label><input type="text" id="m-nombre" required></div>
-                    <div class="field"><label for="m-tel">Teléfono (opcional)</label><input type="tel" id="m-tel" inputmode="numeric"></div>
-                    <div class="field"><label for="m-cancha">Cancha</label>
-                        <select id="m-cancha">${canchas.map((c) => `<option value="${Utils.esc(c.id)}">${Utils.esc(c.nombre)}</option>`).join('')}</select></div>
-                    <div class="field"><label for="m-fecha">Fecha</label><input type="date" id="m-fecha" value="${$('f-fecha').value || Utils.hoyISO()}" min="${Utils.hoyISO()}"></div>
-                    <div class="field"><label for="m-hora">Horario</label>
-                        <select id="m-hora"></select></div>
-                    <div class="field"><label for="m-horas">Duración</label>
-                        <select id="m-horas">${Array.from({ length: cfg.maxHorasReserva }, (_, i) => `<option value="${i + 1}">${i + 1} hora${i ? 's' : ''}</option>`).join('')}</select></div>
-                    <div class="field"><label for="m-senia">Seña cobrada ($)</label><input type="number" id="m-senia" min="0" step="100" value="0"></div>
+                    <div class="field"><label for="m-nombre">Nombre del cliente</label><input type="text" id="m-nombre" list="m-clientes" required autocomplete="off" value="${Utils.esc(pre.nombre || '')}"></div>
+                    <div class="field"><label for="m-tel">WhatsApp</label><input type="tel" id="m-tel" inputmode="numeric" value="${Utils.esc(pre.telefono || '')}"></div>
+                    <div class="field"><label for="m-cancha">Cancha</label><select id="m-cancha">${canchas.map((c) => `<option value="${Utils.esc(c.id)}"${c.id === pre.cancha ? ' selected' : ''}>${Utils.esc(c.nombre)}</option>`).join('')}</select></div>
+                    <div class="field"><label for="m-fecha">Fecha</label><input type="date" id="m-fecha" value="${fecha}" min="${Utils.hoyISO()}"></div>
+                    <div class="field"><label for="m-hora">Horario</label><select id="m-hora"></select></div>
+                    <div class="field"><label for="m-horas">Duración</label><select id="m-horas">${Array.from({ length: cfg.maxHorasReserva }, (_, i) => `<option value="${i + 1}">${i + 1} hora${i ? 's' : ''}</option>`).join('')}</select></div>
+                    <div class="field"><label for="m-senia">Seña que ya cobraste ($)</label><input type="number" id="m-senia" min="0" step="500" value="0"></div>
+                    <div class="field field-check"><label class="check"><input type="checkbox" id="m-fijo"> Repetir todas las semanas (turno fijo)</label></div>
                 </form>
+                <datalist id="m-clientes">${conocidos.map((c) => `<option value="${Utils.esc(c.cliente_nombre)}" label="${Utils.esc(c.cliente_telefono)}"></option>`).join('')}</datalist>
                 <p id="m-resumen" class="resumen-linea"></p>
                 <p id="m-error" class="error-msg" role="alert" hidden></p>`,
             botones: [
                 { texto: 'Cancelar', clase: 'btn-secundario' },
-                {
-                    texto: 'Crear reserva',
-                    accion: () => {
-                        const error = $('m-error');
-                        const resultado = Booking.crearReserva({
-                            canchaId: $('m-cancha').value,
-                            fecha: $('m-fecha').value,
-                            hora: $('m-hora').value,
-                            cantidadHoras: Number($('m-horas').value),
-                            metodoPago: 'manual',
-                            cliente: { nombre: $('m-nombre').value, telefono: $('m-tel').value },
-                            montoSenia: $('m-senia').value,
-                            creadaPor: usuario.id
-                        });
-                        if (!resultado.exito) { error.textContent = resultado.mensaje; error.hidden = false; return false; }
-                        UI.toast('Reserva creada correctamente.');
-                        $('f-fecha').value = resultado.reserva.fecha;
-                        verTodas = false;
-                        renderKpis();
-                        renderAgenda();
-                    }
-                }
+                { texto: 'Guardar reserva', accion: (c, boton) => guardarManual(c, boton) }
             ]
         });
 
-        const actualizar = () => {
-            const ctx = Booking.contexto();
-            const canchaId = $('m-cancha').value;
-            const fecha = $('m-fecha').value;
-            const previa = $('m-hora').value;
-            $('m-hora').innerHTML = horarios.map((h) => {
-                const estado = Utils.esFechaValida(fecha) ? Booking.estadoHora(ctx, canchaId, fecha, h) : 'libre';
-                return `<option value="${h}"${estado === 'libre' ? '' : ' disabled'}>${h}${estado === 'libre' ? '' : estado === 'ocupado' ? ' (ocupado)' : estado === 'cerrado' ? ' (cerrado)' : ' (pasó)'}</option>`;
+        const el = (id) => ctl.el.querySelector(`#${id}`);
+        el('m-nombre').addEventListener('change', () => {
+            const c = conocidos.find((x) => x.cliente_nombre === el('m-nombre').value);
+            if (c && !el('m-tel').value) el('m-tel').value = c.cliente_telefono;
+        });
+
+        async function actualizar() {
+            const canchaId = el('m-cancha').value;
+            const f = el('m-fecha').value;
+            const previa = el('m-hora').value || (pre.hora !== undefined ? String(pre.hora) : '');
+            if (!Utils.esFechaValida(f)) return;
+            let ctx;
+            try { ctx = await Booking.cargarContexto(f, f); } catch (e) { return; }
+            el('m-hora').innerHTML = Config.horarios().map((h) => {
+                const est = Booking.estadoHora(ctx, canchaId, f, h);
+                const etiqueta = { libre: '', ocupado: ' (ocupado)', fijo: ' (turno fijo)', reservando: ' (reservando)', vencido: ' (pasó)', cerrado: ' (cerrado)' }[est];
+                return `<option value="${h}"${est === 'libre' ? '' : ' disabled'}>${Utils.hhmm(h)}${etiqueta}</option>`;
             }).join('');
-            if (previa && !$('m-hora').querySelector(`option[value="${previa}"]:disabled`)) $('m-hora').value = previa;
-            else { const libre = $('m-hora').querySelector('option:not([disabled])'); if (libre) $('m-hora').value = libre.value; }
+            const opcion = el('m-hora').querySelector(`option[value="${previa}"]:not([disabled])`) || el('m-hora').querySelector('option:not([disabled])');
+            if (opcion) el('m-hora').value = opcion.value;
             const cancha = Config.canchaPorId(canchaId);
-            const n = Number($('m-horas').value);
-            if (cancha) {
-                const p = Booking.calcularPrecio(cancha, n);
-                $('m-resumen').textContent = `Total: ${Utils.moneda(p.total)}${p.descuento ? ' (con descuento por 2 horas)' : ''}. Seña sugerida: ${Utils.moneda(p.senia)}.`;
-            }
-        };
-        ['m-cancha', 'm-fecha', 'm-horas'].forEach((id) => ctl.el.querySelector(`#${id}`).addEventListener('change', actualizar));
+            const p = Booking.calcularPrecio(cancha, Number(el('m-horas').value));
+            el('m-resumen').textContent = `Total ${Utils.moneda(p.total)}${p.descuento ? ' (con promo)' : ''}. ${el('m-fijo').checked ? `Se reservará todos los ${Utils.DIAS[Utils.diaSemana(f)]} a esta hora.` : ''}`;
+        }
+        ['m-cancha', 'm-fecha', 'm-horas', 'm-fijo'].forEach((id) => el(id).addEventListener('change', actualizar));
         actualizar();
+        el('m-nombre').focus();
     }
 
-    // ---------- Calendario ----------
-    function renderCierres() {
-        const hoy = Utils.hoyISO();
-        const fechas = Store.fechasCerradas().filter((f) => f >= hoy).sort();
-        $('lista-cierres').innerHTML = fechas.length
-            ? fechas.map((f) => `<span class="chip-cierre">${Utils.fechaLarga(f)} <button type="button" data-quitar-cierre="${f}" aria-label="Reabrir ${Utils.fechaLarga(f)}">×</button></span>`).join('')
-            : '<p class="vacio">No hay fechas de cierre programadas.</p>';
-    }
-
-    async function agregarCierre(evento) {
-        evento.preventDefault();
-        const fecha = $('cierre-fecha').value;
-        if (!Utils.esFechaValida(fecha) || fecha < Utils.hoyISO()) { UI.toast('Elegí una fecha válida desde hoy en adelante.', 'error'); return; }
-        const cerradas = Store.fechasCerradas();
-        if (cerradas.includes(fecha)) { UI.toast('Esa fecha ya está cerrada.', 'aviso'); return; }
-
-        const afectadas = Booking.obtenerReservas().filter((r) => r.fecha === fecha && Booking.ESTADOS_VIGENTES.includes(r.estado));
-        if (afectadas.length) {
-            const ok = await UI.confirmar('Ya hay turnos en esa fecha',
-                `Hay ${afectadas.length} reserva(s) vigente(s) ese día. Cerrar la fecha <strong>no las cancela</strong>: tendrás que avisarles y cancelarlas desde la Agenda. ¿Cerrar igual?`,
-                { textoOk: 'Cerrar igual', textoCancelar: 'Volver' });
-            if (!ok) return;
-        }
-        Store.guardarFechasCerradas([...cerradas, fecha].sort());
-        $('cierre-fecha').value = '';
-        UI.toast('Fecha cerrada. Ya no se puede reservar ese día.');
-        renderCierres();
-    }
-
-    // ---------- Canchas ----------
-    function renderCanchas() {
-        $('lista-canchas').innerHTML = Config.get().canchas.map((c) => `
-            <form class="cancha-edit" data-cancha-id="${Utils.esc(c.id)}" novalidate>
-                <div class="field"><label>Nombre<input type="text" name="nombre" value="${Utils.esc(c.nombre)}" required maxlength="40"></label></div>
-                <div class="field"><label>Tipo<input type="text" name="tipo" value="${Utils.esc(c.tipo)}" maxlength="24" placeholder="Ej: Fútbol 5"></label></div>
-                <div class="field"><label>Precio por hora ($)<input type="number" name="precioHora" value="${c.precioHora}" min="0" step="500" required></label></div>
-                <label class="check"><input type="checkbox" name="activa" ${c.activa ? 'checked' : ''}> Disponible para reservar</label>
-                <div class="cancha-acciones">
-                    <button type="submit" class="btn btn-sm">Guardar</button>
-                    <button type="button" class="btn btn-peligro btn-sm" data-borrar-cancha="${Utils.esc(c.id)}">Eliminar</button>
-                </div>
-            </form>`).join('');
-    }
-
-    function guardarCancha(formulario) {
-        const id = formulario.dataset.canchaId;
-        const datos = new FormData(formulario);
-        const nombre = String(datos.get('nombre') || '').trim();
-        const precio = Number(datos.get('precioHora'));
-        if (nombre.length < 2) { UI.toast('El nombre de la cancha es obligatorio.', 'error'); return; }
-        if (!Number.isFinite(precio) || precio < 0) { UI.toast('Ingresá un precio válido.', 'error'); return; }
-
-        const canchas = Config.get().canchas.map((c) => c.id === id
-            ? { ...c, nombre, tipo: String(datos.get('tipo') || '').trim(), precioHora: precio, activa: datos.get('activa') === 'on' }
-            : c);
-        Config.guardar({ canchas });
-        UI.toast('Cancha actualizada.');
-        renderFiltroCanchas();
-        renderCanchas();
-    }
-
-    function nuevaCancha() {
-        const ctl = UI.modal({
-            titulo: 'Agregar cancha',
-            cuerpo: `
-                <form class="form-grid" novalidate>
-                    <div class="field"><label for="n-nombre">Nombre</label><input type="text" id="n-nombre" maxlength="40" placeholder="Ej: Cancha de Fútbol 5 (2)" required></div>
-                    <div class="field"><label for="n-tipo">Tipo</label><input type="text" id="n-tipo" maxlength="24" placeholder="Ej: Fútbol 5"></div>
-                    <div class="field"><label for="n-precio">Precio por hora ($)</label><input type="number" id="n-precio" min="0" step="500" required></div>
-                </form>
-                <p id="n-error" class="error-msg" role="alert" hidden></p>`,
-            botones: [
-                { texto: 'Cancelar', clase: 'btn-secundario' },
-                {
-                    texto: 'Agregar',
-                    accion: () => {
-                        const nombre = $('n-nombre').value.trim();
-                        const precio = Number($('n-precio').value);
-                        if (nombre.length < 2 || !Number.isFinite(precio) || precio < 0 || $('n-precio').value === '') {
-                            $('n-error').textContent = 'Completá el nombre y un precio válido.';
-                            $('n-error').hidden = false;
-                            return false;
-                        }
-                        Config.guardar({ canchas: [...Config.get().canchas, { id: Config.nuevoIdCancha(nombre), nombre, tipo: $('n-tipo').value.trim(), precioHora: precio, activa: true }] });
-                        UI.toast('Cancha agregada.');
-                        renderFiltroCanchas();
-                        renderCanchas();
-                    }
+    async function guardarManual(ctl, boton) {
+        const el = (id) => ctl.el.querySelector(`#${id}`);
+        const error = el('m-error');
+        const mostrar = (m) => { error.textContent = m; error.hidden = !m; };
+        const nombre = el('m-nombre').value.trim();
+        if (nombre.length < 2) { mostrar('Ingresá el nombre del cliente.'); return false; }
+        if (!el('m-hora').value) { mostrar('No hay horarios libres para esa cancha y fecha.'); return false; }
+        const datos = {
+            cancha_id: el('m-cancha').value, fecha: el('m-fecha').value, hora: Number(el('m-hora').value),
+            horas: Number(el('m-horas').value), nombre, telefono: Utils.digitos(el('m-tel').value)
+        };
+        try {
+            await UI.conBoton(boton, 'Guardando…', async () => {
+                if (el('m-fijo').checked) {
+                    const res = await AdminFijos.crear({ ...datos, dia_semana: Utils.diaSemana(datos.fecha), desde: datos.fecha });
+                    UI.toast(`Turno fijo creado: ${res.creadas} turno(s) reservados.`);
+                } else {
+                    await Db.rpc('crear_reserva', { p: { ...datos, hora: Utils.hhmm(datos.hora), metodo: 'manual', senia: Number(el('m-senia').value) || 0 } });
+                    UI.toast('Reserva guardada.');
                 }
-            ]
-        });
-        ctl.el.querySelector('form').addEventListener('submit', (e) => e.preventDefault());
-    }
-
-    async function borrarCancha(id) {
-        const cfg = Config.get();
-        if (cfg.canchas.length <= 1) { UI.toast('Tiene que quedar al menos una cancha.', 'error'); return; }
-        const cancha = Config.canchaPorId(id);
-        const futuras = Booking.obtenerReservas().filter((r) => r.canchaId === id && Booking.ESTADOS_VIGENTES.includes(r.estado) && Booking.fin(r) > new Date());
-        if (futuras.length) {
-            UI.alerta('No se puede eliminar', `"${Utils.esc(cancha.nombre)}" tiene ${futuras.length} reserva(s) vigente(s). Cancelalas primero, o desmarcá "Disponible para reservar" para ocultarla.`);
-            return;
+            });
+        } catch (e) {
+            mostrar(e.message);
+            return false;
         }
-        const ok = await UI.confirmar('¿Eliminar la cancha?', `Se eliminará "${Utils.esc(cancha.nombre)}". El historial de reservas se conserva.`, { textoOk: 'Eliminar', peligro: true });
-        if (!ok) return;
-        Config.guardar({ canchas: cfg.canchas.filter((c) => c.id !== id) });
-        UI.toast('Cancha eliminada.');
-        renderFiltroCanchas();
-        renderCanchas();
+        clientesConocidos = null;
+        fechaGrilla = datos.fecha;
+        $('g-fecha').value = fechaGrilla;
+        refrescar();
+        return true;
     }
 
-    // ---------- Formularios de ajustes ----------
-    function renderFormularios() {
-        const c = Config.get();
-        $('h-apertura').value = c.horaApertura;
-        $('h-cierre').value = c.horaCierre;
-        $('h-dias').value = c.diasAnticipacion;
-        $('h-max').value = c.maxHorasReserva;
-        $('h-tolerancia').value = c.toleranciaMinutos;
-
-        $('r-nombre').value = c.nombreComplejo;
-        $('r-senia').value = c.montoSenia;
-        $('r-cancelacion').value = c.limiteHorasCancelacion;
-        $('r-puntos').value = c.puntosPorHora;
-        $('r-descuento').value = c.descuentoSegundaHora;
-        $('r-descuento-activo').checked = c.descuentoActivo;
-        $('r-mp').checked = c.pagoMercadoPago;
-        $('r-transf').checked = c.pagoTransferencia;
-        $('r-prueba').checked = c.modoPruebaPago;
-        $('r-alias').value = c.alias;
-        $('r-retencion').value = c.minutosRetencionTransferencia;
-        $('r-whatsapp').value = c.whatsapp;
-    }
-
-    function guardarHorarios(evento) {
-        evento.preventDefault();
-        const apertura = Number($('h-apertura').value);
-        const cierre = Number($('h-cierre').value);
-        if (!(apertura >= 0 && apertura <= 23) || !(cierre >= 1 && cierre <= 24) || cierre <= apertura) {
-            UI.toast('El cierre debe ser posterior a la apertura (entre 0 y 24 hs).', 'error');
-            return;
-        }
-        Config.guardar({
-            horaApertura: apertura, horaCierre: cierre,
-            diasAnticipacion: Number($('h-dias').value), maxHorasReserva: Number($('h-max').value),
-            toleranciaMinutos: Number($('h-tolerancia').value)
-        });
-        UI.toast('Horarios actualizados.');
-        renderFormularios();
-        renderKpis();
-    }
-
-    function guardarReglas(evento) {
-        evento.preventDefault();
-        const error = $('reglas-error');
-        const nombre = $('r-nombre').value.trim();
-        const mp = $('r-mp').checked;
-        const transf = $('r-transf').checked;
-        const mensaje = nombre.length < 2 ? 'Ingresá el nombre del complejo.'
-            : !mp && !transf ? 'Dejá habilitado al menos un medio de pago.'
-            : transf && !$('r-alias').value.trim() ? 'Ingresá el alias para recibir transferencias.'
-            : null;
-        error.textContent = mensaje || '';
-        error.hidden = !mensaje;
-        if (mensaje) return;
-
-        Config.guardar({
-            nombreComplejo: nombre,
-            montoSenia: Number($('r-senia').value),
-            limiteHorasCancelacion: Number($('r-cancelacion').value),
-            puntosPorHora: Number($('r-puntos').value),
-            descuentoSegundaHora: Number($('r-descuento').value),
-            descuentoActivo: $('r-descuento-activo').checked,
-            pagoMercadoPago: mp, pagoTransferencia: transf, modoPruebaPago: $('r-prueba').checked,
-            alias: $('r-alias').value.trim(),
-            minutosRetencionTransferencia: Number($('r-retencion').value),
-            whatsapp: $('r-whatsapp').value
-        });
-        UI.toast('Reglas guardadas.');
-        UI.montarEncabezado('admin');
-        renderFormularios();
-    }
-
-    // ---------- Clientes ----------
-    function renderClientes() {
-        const texto = $('c-buscar').value.trim().toLowerCase();
-        const reservas = Booking.obtenerReservas();
-        const lista = Store.usuarios()
-            .filter((u) => !texto || [u.nombre, u.email, u.telefono].some((v) => String(v || '').toLowerCase().includes(texto)))
-            .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-
-        if (!lista.length) { $('lista-clientes').innerHTML = '<p class="vacio">No se encontraron clientes.</p>'; return; }
-
-        const cuerpo = lista.map((u) => {
-            const propias = reservas.filter((r) => r.usuarioId === u.id && ['activa', 'completada'].includes(r.estado));
-            const wa = Utils.linkWhatsApp(u.telefono, `Hola ${u.nombre}, te escribimos de ${Config.get().nombreComplejo}.`);
-            const esDuenio = Auth.esDuenio(u);
-            const rol = esDuenio ? '<span class="badge badge-activa">Dueño</span>'
-                : Auth.esDuenio(usuario)
-                    ? `<select data-rol="${Utils.esc(u.id)}" aria-label="Rol de ${Utils.esc(u.nombre)}"><option value="cliente"${u.rol === 'cliente' ? ' selected' : ''}>Cliente</option><option value="empleado"${u.rol === 'empleado' ? ' selected' : ''}>Empleado</option></select>`
-                    : (u.rol === 'empleado' ? 'Empleado' : 'Cliente');
-            return `<tr>
-                <td data-label="Cliente"><strong>${Utils.esc(u.nombre)}</strong><br><small>${Utils.esc(u.email)}</small></td>
-                <td data-label="Teléfono">${Utils.esc(u.telefono)}</td>
-                <td data-label="Turnos">${propias.length}</td>
-                <td data-label="Puntos">${u.puntos || 0}</td>
-                <td data-label="Rol">${rol}</td>
-                <td data-label="Contacto">${wa ? `<a class="btn btn-whatsapp btn-sm" href="${Utils.esc(wa)}" target="_blank" rel="noopener">WhatsApp</a>` : '-'}</td>
-            </tr>`;
-        }).join('');
-
-        $('lista-clientes').innerHTML = `
-            <table class="tabla">
-                <thead><tr><th>Cliente</th><th>Teléfono</th><th>Turnos</th><th>Puntos</th><th>Rol</th><th>Contacto</th></tr></thead>
-                <tbody>${cuerpo}</tbody>
-            </table>`;
-    }
-
-    // ---------- Reportes ----------
-    function datosReporte() {
-        const desde = $('rep-desde').value;
-        const hasta = $('rep-hasta').value;
-        const reservas = Booking.obtenerReservas().filter((r) => (!desde || r.fecha >= desde) && (!hasta || r.fecha <= hasta));
-        return { desde, hasta, reservas, validas: reservas.filter((r) => ['activa', 'completada'].includes(r.estado)) };
-    }
-
-    function renderReporte() {
-        const { desde, hasta, reservas, validas } = datosReporte();
-        const total = validas.reduce((s, r) => s + r.precioTotal, 0);
-        const senias = validas.reduce((s, r) => s + r.montoSenia, 0);
-        const horas = validas.reduce((s, r) => s + r.cantidadHoras, 0);
-        const canceladas = reservas.filter((r) => r.estado === 'cancelada').length;
-
-        const porCancha = Config.get().canchas.map((c) => {
-            const del = validas.filter((r) => r.canchaId === c.id);
-            return { nombre: c.nombre, turnos: del.length, horas: del.reduce((s, r) => s + r.cantidadHoras, 0), ingresos: del.reduce((s, r) => s + r.precioTotal, 0) };
-        });
-        const franjas = {};
-        validas.forEach((r) => r.horas.forEach((h) => { franjas[h] = (franjas[h] || 0) + 1; }));
-        const top = Object.entries(franjas).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-        $('reporte-contenido').innerHTML = `
-            <p class="muted">Período: ${desde ? Utils.fechaCorta(desde) : 'inicio'} al ${hasta ? Utils.fechaCorta(hasta) : 'hoy'}. Se cuentan turnos confirmados y jugados.</p>
-            <div class="kpis kpis-chicos">
-                <div class="kpi"><strong>${validas.length}</strong><span>Turnos</span></div>
-                <div class="kpi"><strong>${horas}</strong><span>Horas alquiladas</span></div>
-                <div class="kpi"><strong>${Utils.moneda(total)}</strong><span>Facturación estimada</span></div>
-                <div class="kpi"><strong>${Utils.moneda(senias)}</strong><span>Señas</span></div>
-                <div class="kpi"><strong>${canceladas}</strong><span>Cancelados</span></div>
-            </div>
-            <div class="tabla-wrap"><table class="tabla">
-                <thead><tr><th>Cancha</th><th>Turnos</th><th>Horas</th><th>Facturación</th></tr></thead>
-                <tbody>${porCancha.map((f) => `<tr><td data-label="Cancha">${Utils.esc(f.nombre)}</td><td data-label="Turnos">${f.turnos}</td><td data-label="Horas">${f.horas}</td><td data-label="Facturación">${Utils.moneda(f.ingresos)}</td></tr>`).join('')}</tbody>
-            </table></div>
-            <h3 class="sub-titulo">Horarios más pedidos</h3>
-            ${top.length ? `<ol class="top-lista">${top.map(([h, n]) => `<li><strong>${h} hs</strong> <span>${n} turno(s)</span></li>`).join('')}</ol>` : '<p class="vacio">Sin datos en el período.</p>'}`;
-    }
-
-    function descargarCsv() {
-        const { reservas } = datosReporte();
-        const usuarios = Store.usuarios();
-        const filas = [['Fecha', 'Horario', 'Cancha', 'Cliente', 'Teléfono', 'Estado', 'Método', 'Total', 'Seña', 'Saldo']];
-        reservas.sort((a, b) => Booking.inicio(a) - Booking.inicio(b)).forEach((r) => {
-            const u = r.usuarioId ? usuarios.find((x) => x.id === r.usuarioId) : null;
-            filas.push([r.fecha, Booking.rangoHorario(r), r.nombreCancha, u ? u.nombre : r.cliente?.nombre || '', u ? u.telefono : r.cliente?.telefono || '',
-                (ETIQUETAS[r.estado] || [r.estado])[0], METODOS[r.metodoPago] || '', r.precioTotal, r.montoSenia, r.saldoRestante ?? '']);
-        });
-        // El BOM permite que Excel abra bien las tildes.
-        Utils.descargar(`reservas_${Utils.hoyISO()}.csv`, '﻿' + filas.map((f) => f.map(Utils.csvCelda).join(';')).join('\r\n'), 'text/csv');
-    }
-
-    // ---------- Respaldo ----------
-    function exportar() {
-        Utils.descargar(`respaldo_${Utils.hoyISO()}.json`, JSON.stringify(Store.exportarTodo(), null, 2), 'application/json');
-        UI.toast('Respaldo descargado.');
-    }
-
-    async function importar(archivo) {
-        if (!archivo) return;
-        let datos;
-        try { datos = JSON.parse(await archivo.text()); } catch (_) { UI.alerta('Archivo no válido', 'No se pudo leer el archivo de respaldo.'); return; }
-        const ok = await UI.confirmar('¿Restaurar este respaldo?', 'Se reemplazarán <strong>todos</strong> los datos actuales (reservas, clientes y configuración) por los del archivo.', { textoOk: 'Restaurar', peligro: true });
-        if (!ok) return;
-        if (!Store.importarTodo(datos)) { UI.alerta('Archivo no válido', 'El archivo no tiene el formato de un respaldo del sistema.'); return; }
-        Config.recargar();
-        UI.toast('Respaldo restaurado.');
-        setTimeout(() => location.reload(), 900);
-    }
-
-    async function restablecer() {
-        const ok = await UI.confirmar('¿Restablecer la configuración?', 'Se restauran precios, horarios, reglas y canchas a los valores originales. Las reservas y los clientes <strong>no</strong> se borran.', { textoOk: 'Restablecer', peligro: true });
-        if (!ok) return;
-        Config.restablecer();
-        UI.toast('Configuración restablecida.');
-        refrescarTodo();
-        UI.montarEncabezado('admin');
+    // ---------- Tiempo real ----------
+    function tiempoReal() {
+        const indicador = $('estado-vivo');
+        const actualizar = Utils.debounce(refrescar, 600);
+        Db.sb.channel('panel-reservas')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'reservas' }, (p) => {
+                const r = p.new || {};
+                const recien = r.confirmada_en && Date.now() - Date.parse(r.confirmada_en) < 60000;
+                if (r.estado === 'confirmada' && recien && r.metodo_pago === 'mercadopago') {
+                    UI.toast(`💰 Nueva reserva pagada: ${r.cliente_nombre} · ${r.cancha_nombre} · ${Utils.fechaCorta(r.fecha)} ${Utils.hhmm(r.hora_inicio)}`);
+                    if (navigator.vibrate) navigator.vibrate([80, 60, 80]);
+                } else if (p.eventType === 'INSERT' && r.estado === 'pendiente_pago') {
+                    UI.toast(`⏳ ${r.cliente_nombre} está pagando ${r.cancha_nombre} · ${Utils.fechaCorta(r.fecha)} ${Utils.hhmm(r.hora_inicio)}`, 'aviso');
+                }
+                actualizar();
+            })
+            .subscribe((estado) => {
+                indicador.classList.toggle('conectado', estado === 'SUBSCRIBED');
+                indicador.title = estado === 'SUBSCRIBED' ? 'Conectado: las reservas nuevas aparecen solas' : 'Reconectando…';
+            });
     }
 
     // ---------- Eventos ----------
     function iniciarEventos() {
-        ['f-fecha', 'f-cancha', 'f-estado'].forEach((id) => $(id).addEventListener('change', renderAgenda));
-        $('f-buscar').addEventListener('input', renderAgenda);
-        $('btn-todas').addEventListener('click', () => { verTodas = !verTodas; renderAgenda(); });
-        $('btn-nueva-reserva').addEventListener('click', abrirReservaManual);
-
-        $('lista-agenda').addEventListener('click', (e) => {
-            const b = e.target.closest('[data-accion]');
-            if (b) accionReserva(b.dataset.accion, b.dataset.id);
-        });
-
-        $('form-cierre').addEventListener('submit', agregarCierre);
-        $('lista-cierres').addEventListener('click', (e) => {
-            const b = e.target.closest('[data-quitar-cierre]');
+        $('btn-nueva-reserva').addEventListener('click', () => nuevaReserva());
+        document.querySelector('.navegador-dia').addEventListener('click', (e) => {
+            const b = e.target.closest('[data-dia]');
             if (!b) return;
-            Store.guardarFechasCerradas(Store.fechasCerradas().filter((f) => f !== b.dataset.quitarCierre));
-            UI.toast('Fecha reabierta.');
-            renderCierres();
+            fechaGrilla = b.dataset.dia === 'hoy' ? Utils.hoyISO() : Utils.sumarDias(fechaGrilla, Number(b.dataset.dia));
+            $('g-fecha').value = fechaGrilla;
+            renderGrilla();
+        });
+        $('g-fecha').addEventListener('change', () => {
+            if (!Utils.esFechaValida($('g-fecha').value)) return;
+            fechaGrilla = $('g-fecha').value;
+            renderGrilla();
+        });
+        $('grilla').addEventListener('click', (e) => {
+            const turno = e.target.closest('[data-reserva]');
+            if (turno) { detalle(turno.dataset.reserva); return; }
+            const libre = e.target.closest('[data-libre]');
+            if (libre) nuevaReserva({ cancha: libre.dataset.cancha, hora: Number(libre.dataset.hora), fecha: fechaGrilla });
         });
 
-        $('btn-nueva-cancha').addEventListener('click', nuevaCancha);
-        $('lista-canchas').addEventListener('submit', (e) => { e.preventDefault(); guardarCancha(e.target); });
-        $('lista-canchas').addEventListener('click', (e) => {
-            const b = e.target.closest('[data-borrar-cancha]');
-            if (b) borrarCancha(b.dataset.borrarCancha);
+        ['f-desde', 'f-hasta', 'f-cancha', 'f-estado'].forEach((id) => $(id).addEventListener('change', renderAgenda));
+        $('f-buscar').addEventListener('input', Utils.debounce(renderAgenda, 300));
+        $('lista-agenda').addEventListener('click', (e) => { const f = e.target.closest('[data-reserva]'); if (f) detalle(f.dataset.reserva); });
+        $('lista-agenda').addEventListener('keydown', (e) => { const f = e.target.closest('[data-reserva]'); if (f && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); detalle(f.dataset.reserva); } });
+
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('[data-ver-devoluciones]')) { e.preventDefault(); $('f-estado').value = 'devolver'; activar('agenda'); }
+            const ir = e.target.closest('[data-ir]');
+            if (ir) { e.preventDefault(); activar(ir.dataset.ir); }
         });
-
-        $('form-horarios').addEventListener('submit', guardarHorarios);
-        $('form-reglas').addEventListener('submit', guardarReglas);
-
-        $('c-buscar').addEventListener('input', renderClientes);
-        $('lista-clientes').addEventListener('change', (e) => {
-            const s = e.target.closest('[data-rol]');
-            if (!s) return;
-            const r = Auth.cambiarRol(usuario, s.dataset.rol, s.value);
-            UI.toast(r.exito ? 'Rol actualizado.' : r.mensaje, r.exito ? 'ok' : 'error');
-            renderClientes();
-        });
-
-        ['rep-desde', 'rep-hasta'].forEach((id) => $(id).addEventListener('change', renderReporte));
-        $('btn-csv').addEventListener('click', descargarCsv);
-        $('btn-imprimir').addEventListener('click', () => window.print());
-
-        $('btn-exportar').addEventListener('click', exportar);
-        $('input-importar').addEventListener('change', (e) => { importar(e.target.files[0]); e.target.value = ''; });
-        $('btn-restablecer').addEventListener('click', restablecer);
     }
+
+    return { $, registrar, refrescar, detalle, nuevaReserva, reservasEntre, activar, renderFiltroCanchas, cargarClientesConocidos };
 })();

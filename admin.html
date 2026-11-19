@@ -3,11 +3,12 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Panel de gestión | Un Show Más</title>
     <meta name="robots" content="noindex">
     <meta name="theme-color" content="#03045E">
     <link rel="icon" type="image/svg+xml" href="assets/logo-mark.svg">
+    <link rel="manifest" href="manifest.webmanifest">
     <link rel="stylesheet" href="css/main.css">
     <link rel="stylesheet" href="css/components.css">
     <link rel="stylesheet" href="css/admin.css">
@@ -15,41 +16,63 @@
 
 <body>
     <a class="skip-link" href="#contenido">Saltar al contenido</a>
-    <header id="site-header"></header>
+    <header id="site-header" class="site-header"></header>
 
     <main id="contenido" class="container admin-container" hidden>
         <div class="admin-titulo">
             <div>
-                <p class="eyebrow">Administración</p>
-                <h1>Panel de gestión</h1>
+                <p class="eyebrow">Panel de gestión</p>
+                <h1 id="admin-saludo">Hola</h1>
             </div>
-            <p class="admin-fecha" id="admin-fecha-hoy"></p>
+            <div class="admin-titulo-der">
+                <span id="estado-vivo" class="estado-vivo" title="Las reservas nuevas aparecen solas">● En vivo</span>
+                <button type="button" class="btn" id="btn-nueva-reserva">+ Nueva reserva</button>
+            </div>
         </div>
 
-        <div id="aviso-password" class="alert alert-warn" role="alert" hidden>
-            <strong>Cambiá la contraseña inicial.</strong> Estás usando la contraseña por defecto del sistema.
-            <a href="perfil.html">Cambiarla ahora</a>
-        </div>
+        <div id="aviso-modo" class="alert alert-warn" hidden></div>
+        <div id="aviso-devoluciones" class="alert alert-error" hidden></div>
 
         <section class="kpis" id="kpis" aria-label="Resumen de hoy"></section>
 
         <div class="admin-tabs" role="tablist" aria-label="Secciones del panel">
-            <button type="button" role="tab" class="admin-tab active" data-tab="agenda" aria-selected="true">Agenda</button>
-            <button type="button" role="tab" class="admin-tab" data-tab="calendario" aria-selected="false">Calendario</button>
-            <button type="button" role="tab" class="admin-tab" data-tab="canchas" aria-selected="false">Canchas y precios</button>
-            <button type="button" role="tab" class="admin-tab" data-tab="reglas" aria-selected="false">Reglas y pagos</button>
-            <button type="button" role="tab" class="admin-tab" data-tab="clientes" aria-selected="false">Clientes</button>
-            <button type="button" role="tab" class="admin-tab" data-tab="reportes" aria-selected="false">Reportes</button>
-            <button type="button" role="tab" class="admin-tab" data-tab="datos" aria-selected="false">Respaldo</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="grilla">Grilla del día</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="agenda">Agenda</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="fijos">Turnos fijos</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="estadisticas">Estadísticas</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="clientes">Clientes</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="canchas" data-duenio>Canchas y horarios</button>
+            <button type="button" role="tab" class="admin-tab" data-tab="ajustes" data-duenio>Ajustes y cobros</button>
         </div>
 
+        <!-- GRILLA DEL DÍA -->
+        <section class="admin-panel" id="panel-grilla" role="tabpanel" hidden>
+            <div class="grilla-barra">
+                <div class="navegador-dia">
+                    <button type="button" class="btn btn-secundario btn-sm" data-dia="-1" aria-label="Día anterior">◀</button>
+                    <button type="button" class="btn btn-secundario btn-sm" data-dia="hoy">Hoy</button>
+                    <button type="button" class="btn btn-secundario btn-sm" data-dia="1" aria-label="Día siguiente">▶</button>
+                    <label class="sr-only" for="g-fecha">Fecha</label>
+                    <input type="date" id="g-fecha">
+                </div>
+                <h2 id="g-titulo" class="grilla-titulo"></h2>
+            </div>
+            <div id="g-resumen" class="resumen-dia"></div>
+            <div id="grilla" class="grilla-wrap"></div>
+            <p class="hint">Tocá un horario libre para cargar una reserva, o un turno para ver el detalle, cobrar el saldo o cancelarlo.</p>
+        </section>
+
         <!-- AGENDA -->
-        <section class="admin-panel" id="panel-agenda" role="tabpanel">
+        <section class="admin-panel" id="panel-agenda" role="tabpanel" hidden>
             <div class="panel-barra">
                 <div class="filtros">
                     <div class="field">
-                        <label for="f-fecha">Fecha</label>
-                        <input type="date" id="f-fecha">
+                        <label for="f-desde">Desde</label>
+                        <input type="date" id="f-desde">
+                    </div>
+                    <div class="field">
+                        <label for="f-hasta">Hasta</label>
+                        <input type="date" id="f-hasta">
                     </div>
                     <div class="field">
                         <label for="f-cancha">Cancha</label>
@@ -58,188 +81,167 @@
                     <div class="field">
                         <label for="f-estado">Estado</label>
                         <select id="f-estado">
-                            <option value="">Todos</option>
-                            <option value="activa">Confirmadas</option>
-                            <option value="pendiente_pago">Pendientes de pago</option>
-                            <option value="completada">Jugadas</option>
+                            <option value="">Todas</option>
+                            <option value="vigentes">Próximas (vigentes)</option>
+                            <option value="pendiente_pago">Esperando pago</option>
+                            <option value="confirmada">Confirmadas</option>
+                            <option value="saldo">Con saldo sin cobrar</option>
                             <option value="cancelada">Canceladas</option>
+                            <option value="vencida">Pago vencido</option>
+                            <option value="devolver">Seña a devolver</option>
                         </select>
                     </div>
                     <div class="field">
-                        <label for="f-buscar">Buscar cliente</label>
-                        <input type="search" id="f-buscar" placeholder="Nombre o teléfono">
+                        <label for="f-buscar">Buscar</label>
+                        <input type="search" id="f-buscar" placeholder="Nombre, teléfono o código">
                     </div>
-                </div>
-                <div class="acciones-barra">
-                    <button type="button" class="btn btn-secundario" id="btn-todas">Ver todas las fechas</button>
-                    <button type="button" class="btn" id="btn-nueva-reserva">+ Nueva reserva</button>
                 </div>
             </div>
             <div id="lista-agenda" class="tabla-wrap"></div>
         </section>
 
-        <!-- CALENDARIO -->
-        <section class="admin-panel" id="panel-calendario" role="tabpanel" hidden>
-            <div class="card-box">
-                <h2 class="perfil-sec-title">Días en que el complejo está cerrado</h2>
-                <p class="muted">Los clientes no podrán reservar en estas fechas (feriados, mantenimiento, eventos).</p>
-                <form id="form-cierre" class="inline-form">
-                    <div class="field">
-                        <label for="cierre-fecha">Agregar fecha de cierre</label>
-                        <input type="date" id="cierre-fecha" required>
-                    </div>
-                    <button type="submit" class="btn">Cerrar este día</button>
-                </form>
-                <div id="lista-cierres" class="chips-lista"></div>
-            </div>
-        </section>
-
-        <!-- CANCHAS -->
-        <section class="admin-panel" id="panel-canchas" role="tabpanel" hidden>
+        <!-- TURNOS FIJOS -->
+        <section class="admin-panel" id="panel-fijos" role="tabpanel" hidden>
             <div class="card-box">
                 <div class="panel-cabecera">
                     <div>
-                        <h2 class="perfil-sec-title">Canchas y precios</h2>
-                        <p class="muted">Editá nombre, precio por hora y disponibilidad. Los cambios se aplican en la web al instante.</p>
+                        <h2 class="perfil-sec-title">Turnos fijos semanales</h2>
+                        <p class="muted">Mismo día y hora todas las semanas. El sistema reserva solo las próximas 8 semanas y se pagan en la cancha. Para saltear una semana, cancelá ese turno desde la grilla.</p>
                     </div>
-                    <button type="button" class="btn btn-secundario" id="btn-nueva-cancha">+ Agregar cancha</button>
+                    <button type="button" class="btn" id="btn-nuevo-fijo">+ Nuevo turno fijo</button>
                 </div>
-                <div id="lista-canchas"></div>
-            </div>
-            <div class="card-box">
-                <h2 class="perfil-sec-title">Horarios de atención</h2>
-                <form id="form-horarios" class="form-grid" novalidate>
-                    <div class="field">
-                        <label for="h-apertura">Primer turno (hora de inicio)</label>
-                        <input type="number" id="h-apertura" min="0" max="23" required>
-                    </div>
-                    <div class="field">
-                        <label for="h-cierre">Fin del último turno (24 = medianoche)</label>
-                        <input type="number" id="h-cierre" min="1" max="24" required>
-                    </div>
-                    <div class="field">
-                        <label for="h-dias">Días de anticipación para reservar</label>
-                        <input type="number" id="h-dias" min="1" max="60" required>
-                    </div>
-                    <div class="field">
-                        <label for="h-max">Máximo de horas seguidas por reserva</label>
-                        <input type="number" id="h-max" min="1" max="4" required>
-                    </div>
-                    <div class="field">
-                        <label for="h-tolerancia">Minutos de tolerancia para reservar un turno ya iniciado</label>
-                        <input type="number" id="h-tolerancia" min="0" max="59" required>
-                    </div>
-                </form>
-                <button type="submit" class="btn" form="form-horarios">Guardar horarios</button>
+                <div id="lista-fijos"></div>
             </div>
         </section>
 
-        <!-- REGLAS Y PAGOS -->
-        <section class="admin-panel" id="panel-reglas" role="tabpanel" hidden>
-            <form id="form-reglas" class="card-box" novalidate>
-                <h2 class="perfil-sec-title">Reglas del alquiler</h2>
-                <div class="form-grid">
-                    <div class="field">
-                        <label for="r-nombre">Nombre del complejo</label>
-                        <input type="text" id="r-nombre" required maxlength="40">
-                    </div>
-                    <div class="field">
-                        <label for="r-senia">Monto de la seña ($)</label>
-                        <input type="number" id="r-senia" min="0" step="100" required>
-                    </div>
-                    <div class="field">
-                        <label for="r-cancelacion">Horas mínimas para cancelar sin cargo</label>
-                        <input type="number" id="r-cancelacion" min="0" required>
-                    </div>
-                    <div class="field">
-                        <label for="r-puntos">Puntos por hora reservada</label>
-                        <input type="number" id="r-puntos" min="0" required>
-                    </div>
-                    <div class="field">
-                        <label for="r-descuento">Descuento en la 2.ª hora (%)</label>
-                        <input type="number" id="r-descuento" min="0" max="100" required>
-                    </div>
-                    <div class="field field-check">
-                        <label class="check"><input type="checkbox" id="r-descuento-activo"> Promoción de 2.ª hora activa</label>
+        <!-- ESTADÍSTICAS -->
+        <section class="admin-panel" id="panel-estadisticas" role="tabpanel" hidden>
+            <div class="panel-barra">
+                <div class="filtros" role="group" aria-label="Período">
+                    <div class="segmentado" id="e-periodo">
+                        <button type="button" data-periodo="7">7 días</button>
+                        <button type="button" data-periodo="30" class="active">30 días</button>
+                        <button type="button" data-periodo="90">90 días</button>
+                        <button type="button" data-periodo="mes">Este mes</button>
+                        <button type="button" data-periodo="mes-1">Mes pasado</button>
                     </div>
                 </div>
-
-                <h2 class="perfil-sec-title">Medios de pago y contacto</h2>
-                <div class="form-grid">
-                    <div class="field field-check">
-                        <label class="check"><input type="checkbox" id="r-mp"> Aceptar Mercado Pago</label>
-                    </div>
-                    <div class="field field-check">
-                        <label class="check"><input type="checkbox" id="r-transf"> Aceptar transferencia</label>
-                    </div>
-                    <div class="field">
-                        <label for="r-alias">Alias para transferencias</label>
-                        <input type="text" id="r-alias" maxlength="40">
-                    </div>
-                    <div class="field">
-                        <label for="r-retencion">Minutos para pagar una transferencia</label>
-                        <input type="number" id="r-retencion" min="5" max="1440" required>
-                    </div>
-                    <div class="field">
-                        <label for="r-whatsapp">WhatsApp del complejo (con código de país)</label>
-                        <input type="tel" id="r-whatsapp" inputmode="numeric" placeholder="5491122334455">
-                    </div>
-                    <div class="field field-check">
-                        <label class="check"><input type="checkbox" id="r-prueba"> Mercado Pago en modo prueba (simulado)</label>
-                    </div>
+                <div class="acciones-barra">
+                    <button type="button" class="btn btn-secundario" id="btn-csv">Descargar CSV</button>
+                    <button type="button" class="btn btn-secundario" id="btn-imprimir">Imprimir</button>
                 </div>
-                <p class="hint">Mientras el modo prueba esté activo, el pago con Mercado Pago es una simulación: no se cobra dinero real. El cobro real requiere conectar el servidor con las credenciales del complejo.</p>
-                <p id="reglas-error" class="error-msg" role="alert" hidden></p>
-                <button type="submit" class="btn">Guardar cambios</button>
-            </form>
+            </div>
+            <div id="estadisticas"></div>
         </section>
 
         <!-- CLIENTES -->
         <section class="admin-panel" id="panel-clientes" role="tabpanel" hidden>
             <div class="card-box">
                 <div class="panel-cabecera">
-                    <h2 class="perfil-sec-title">Clientes registrados</h2>
-                    <div class="field field-busqueda">
-                        <label for="c-buscar" class="sr-only">Buscar cliente</label>
-                        <input type="search" id="c-buscar" placeholder="Buscar por nombre, correo o teléfono">
+                    <div>
+                        <h2 class="perfil-sec-title">Clientes</h2>
+                        <p class="muted">Todos los que reservaron alguna vez, con o sin cuenta (se agrupan por WhatsApp).</p>
+                    </div>
+                    <div class="filtros">
+                        <div class="field field-busqueda">
+                            <label for="c-buscar" class="sr-only">Buscar cliente</label>
+                            <input type="search" id="c-buscar" placeholder="Buscar por nombre, correo o teléfono">
+                        </div>
+                        <button type="button" class="btn btn-secundario" id="btn-clientes-csv">Descargar CSV</button>
                     </div>
                 </div>
                 <div id="lista-clientes" class="tabla-wrap"></div>
             </div>
         </section>
 
-        <!-- REPORTES -->
-        <section class="admin-panel" id="panel-reportes" role="tabpanel" hidden>
+        <!-- CANCHAS Y HORARIOS -->
+        <section class="admin-panel" id="panel-canchas" role="tabpanel" hidden>
             <div class="card-box">
                 <div class="panel-cabecera">
-                    <h2 class="perfil-sec-title">Reportes</h2>
-                    <div class="filtros">
-                        <div class="field">
-                            <label for="rep-desde">Desde</label>
-                            <input type="date" id="rep-desde">
-                        </div>
-                        <div class="field">
-                            <label for="rep-hasta">Hasta</label>
-                            <input type="date" id="rep-hasta">
-                        </div>
-                        <button type="button" class="btn btn-secundario" id="btn-csv">Descargar CSV</button>
-                        <button type="button" class="btn btn-secundario" id="btn-imprimir">Imprimir</button>
+                    <div>
+                        <h2 class="perfil-sec-title">Canchas y precios</h2>
+                        <p class="muted">Los cambios se ven en la web al instante. Los turnos ya reservados mantienen su precio.</p>
                     </div>
+                    <button type="button" class="btn btn-secundario" id="btn-nueva-cancha">+ Agregar cancha</button>
                 </div>
-                <div id="reporte-contenido"></div>
+                <div id="lista-canchas"></div>
+            </div>
+            <div class="card-box">
+                <h2 class="perfil-sec-title">Horarios</h2>
+                <form id="form-horarios" onsubmit="return false" novalidate>
+                    <div class="form-grid">
+                        <div class="field"><label for="h-apertura">Primer turno (hora)</label><input type="number" id="h-apertura" min="0" max="23" required></div>
+                        <div class="field"><label for="h-cierre">Fin del último turno (24 = medianoche)</label><input type="number" id="h-cierre" min="1" max="24" required></div>
+                        <div class="field"><label for="h-dias">Días de anticipación para reservar</label><input type="number" id="h-dias" min="1" max="60" required></div>
+                        <div class="field"><label for="h-max">Máximo de horas seguidas</label><input type="number" id="h-max" min="1" max="4" required></div>
+                        <div class="field"><label for="h-tolerancia">Minutos para reservar un turno ya empezado</label><input type="number" id="h-tolerancia" min="0" max="59" required></div>
+                    </div>
+                    <button type="submit" class="btn">Guardar horarios</button>
+                </form>
+            </div>
+            <div class="card-box">
+                <h2 class="perfil-sec-title">Días cerrados</h2>
+                <p class="muted">Feriados, mantenimiento o eventos: ese día no se puede reservar.</p>
+                <form id="form-cierre" onsubmit="return false" class="inline-form">
+                    <div class="field"><label for="cierre-fecha">Fecha</label><input type="date" id="cierre-fecha" required></div>
+                    <div class="field"><label for="cierre-motivo">Motivo (lo ven los clientes)</label><input type="text" id="cierre-motivo" maxlength="80" placeholder="Ej: Feriado de Navidad"></div>
+                    <button type="submit" class="btn">Cerrar ese día</button>
+                </form>
+                <div id="lista-cierres" class="chips-lista"></div>
             </div>
         </section>
 
-        <!-- RESPALDO -->
-        <section class="admin-panel" id="panel-datos" role="tabpanel" hidden>
+        <!-- AJUSTES Y COBROS -->
+        <section class="admin-panel" id="panel-ajustes" role="tabpanel" hidden>
+            <div id="estado-cobros" class="card-box"></div>
+            <form id="form-ajustes" onsubmit="return false" novalidate>
+                <div class="card-box">
+                    <h2 class="perfil-sec-title">Seña, cancelaciones y promociones</h2>
+                    <div class="form-grid">
+                        <div class="field"><label for="a-senia">Monto de la seña ($)</label><input type="number" id="a-senia" min="0" step="500" required></div>
+                        <div class="field"><label for="a-cancelacion">Se puede cancelar hasta (horas antes)</label><input type="number" id="a-cancelacion" min="0" max="168" required></div>
+                        <div class="field">
+                            <label for="a-politica">Si el cliente cancela a tiempo</label>
+                            <select id="a-politica">
+                                <option value="reembolso">Se le devuelve la seña automáticamente</option>
+                                <option value="sin_reembolso">No se devuelve la seña</option>
+                            </select>
+                        </div>
+                        <div class="field"><label for="a-retencion-mp">Minutos para completar el pago con Mercado Pago</label><input type="number" id="a-retencion-mp" min="5" max="60" required></div>
+                        <div class="field"><label for="a-descuento">Descuento en la 2.ª hora (%)</label><input type="number" id="a-descuento" min="0" max="100" required></div>
+                        <div class="field field-check"><label class="check"><input type="checkbox" id="a-descuento-activo"> Promo de 2.ª hora activa</label></div>
+                        <div class="field"><label for="a-puntos">Puntos por hora (clientes con cuenta)</label><input type="number" id="a-puntos" min="0" required></div>
+                        <div class="field field-check"><label class="check"><input type="checkbox" id="a-nombres"> Mostrar "Juan P. juega a las 20" en la web</label></div>
+                    </div>
+                </div>
+                <div class="card-box">
+                    <h2 class="perfil-sec-title">Medios de pago</h2>
+                    <div class="form-grid">
+                        <div class="field field-check"><label class="check"><input type="checkbox" id="a-mp"> Mercado Pago (recomendado: confirma solo)</label></div>
+                        <div class="field field-check"><label class="check"><input type="checkbox" id="a-transf"> Transferencia (hay que confirmarla a mano)</label></div>
+                        <div class="field"><label for="a-alias">Alias para transferencias</label><input type="text" id="a-alias" maxlength="40"></div>
+                        <div class="field"><label for="a-retencion">Minutos para mandar el comprobante</label><input type="number" id="a-retencion" min="5" max="1440" required></div>
+                    </div>
+                </div>
+                <div class="card-box">
+                    <h2 class="perfil-sec-title">El complejo</h2>
+                    <div class="form-grid">
+                        <div class="field"><label for="a-nombre">Nombre</label><input type="text" id="a-nombre" maxlength="40" required></div>
+                        <div class="field"><label for="a-whatsapp">WhatsApp (con 54 9, ej: 5493415551234)</label><input type="tel" id="a-whatsapp" inputmode="numeric"></div>
+                        <div class="field"><label for="a-direccion">Dirección (para "Cómo llegar")</label><input type="text" id="a-direccion" maxlength="120"></div>
+                        <div class="field"><label for="a-instagram">Instagram (sin @)</label><input type="text" id="a-instagram" maxlength="40"></div>
+                    </div>
+                    <div class="field"><label for="a-aviso">Aviso destacado en la web (opcional)</label><input type="text" id="a-aviso" maxlength="280" placeholder="Ej: Este sábado cerramos a las 20 hs por el torneo"></div>
+                </div>
+                <p id="ajustes-error" class="error-msg" role="alert" hidden></p>
+                <div class="barra-guardar"><button type="submit" class="btn">Guardar ajustes</button></div>
+            </form>
             <div class="card-box">
-                <h2 class="perfil-sec-title">Respaldo de datos</h2>
-                <p class="muted">Por ahora los datos se guardan en este navegador. Descargá un respaldo periódicamente: sirve para recuperar la información o pasarla a otra computadora.</p>
+                <h2 class="perfil-sec-title">Exportar datos</h2>
+                <p class="muted">Los datos están guardados en la base de datos en la nube. Igual podés descargar una copia cuando quieras.</p>
                 <div class="acciones-fila">
-                    <button type="button" class="btn" id="btn-exportar">Descargar respaldo</button>
-                    <label class="btn btn-secundario" for="input-importar">Restaurar desde un archivo</label>
-                    <input type="file" id="input-importar" accept="application/json,.json" hidden>
-                    <button type="button" class="btn btn-peligro" id="btn-restablecer">Restablecer configuración</button>
+                    <button type="button" class="btn btn-secundario" id="btn-exportar-reservas">Todas las reservas (CSV / Excel)</button>
+                    <button type="button" class="btn btn-secundario" id="btn-exportar-json">Copia completa (JSON)</button>
                 </div>
             </div>
         </section>
@@ -247,13 +249,18 @@
 
     <footer id="site-footer" class="site-footer"></footer>
 
-    <script src="js/store.js"></script>
-    <script src="js/config.js"></script>
+    <script src="vendor/supabase-2.119.0.js"></script>
+    <script src="js/env.js"></script>
     <script src="js/utils.js"></script>
+    <script src="js/db.js"></script>
+    <script src="js/config.js"></script>
     <script src="js/auth.js"></script>
     <script src="js/booking.js"></script>
     <script src="js/ui.js"></script>
     <script src="js/admin.js"></script>
+    <script src="js/admin-fijos.js"></script>
+    <script src="js/admin-estadisticas.js"></script>
+    <script src="js/admin-ajustes.js"></script>
 </body>
 
 </html>

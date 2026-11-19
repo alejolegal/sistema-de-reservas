@@ -1,0 +1,13 @@
+{
+  "name": "sistema-de-reservas",
+  "private": true,
+  "type": "module",
+  "description": "Sistema de reservas de canchas con Supabase y Mercado Pago",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "test:e2e": "node scripts/e2e.mjs"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}

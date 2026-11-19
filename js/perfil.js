@@ -1,142 +1,94 @@
-// js/perfil.js - Perfil del cliente: datos personales, puntos y reservas.
+// js/perfil.js - "Mis reservas": con cuenta (datos, puntos, historial) o sin cuenta
+// (las reservas hechas desde este celular, guardadas con su enlace privado).
 
 (() => {
-    let usuario = null;
+    document.addEventListener('DOMContentLoaded', () => UI.arrancar('perfil', iniciar));
 
-    const ETIQUETAS = {
-        activa: ['Confirmada', 'badge-activa'],
-        pendiente_pago: ['Pendiente de pago', 'badge-pendiente'],
-        cancelada: ['Cancelada', 'badge-cancelada'],
-        completada: ['Jugada', 'badge-completada']
-    };
-
-    document.addEventListener('DOMContentLoaded', () => {
-        UI.iniciarPagina('perfil');
-        usuario = Auth.requerirSesion();
-        if (!usuario) return;
-
-        document.getElementById('contenido').hidden = false;
-        renderResumen();
-        renderFormulario();
-        renderReservas();
-
-        document.getElementById('form-perfil').addEventListener('submit', guardarPerfil);
-        document.getElementById('lista-mis-reservas').addEventListener('click', alHacerClic);
-    });
-
-    function refrescarUsuario() {
-        usuario = Auth.usuarioActual();
-    }
-
-    function renderResumen() {
-        const reservas = Booking.reservasDeUsuario(usuario.id);
-        const jugables = reservas.filter((r) => r.estado === 'activa' || r.estado === 'completada').length;
-        document.getElementById('perfil-saludo-nombre').textContent = usuario.nombre;
-        document.getElementById('perfil-puntos-val').textContent = usuario.puntos || 0;
-        document.getElementById('perfil-total-alquileres').textContent = jugables;
-
-        const aviso = document.getElementById('aviso-password');
-        aviso.hidden = !usuario.cambiarPassword;
-    }
-
-    function renderFormulario() {
-        document.getElementById('input-nombre').value = usuario.nombre;
-        document.getElementById('input-telefono').value = usuario.telefono;
-    }
-
-    async function guardarPerfil(evento) {
-        evento.preventDefault();
-        const boton = evento.target.querySelector('button[type="submit"]');
-        const error = document.getElementById('perfil-error');
-        error.hidden = true;
-        boton.disabled = true;
-
-        const resultado = await Auth.actualizarPerfil(usuario.id, {
-            nombre: document.getElementById('input-nombre').value,
-            telefono: document.getElementById('input-telefono').value,
-            passwordActual: document.getElementById('input-password-actual').value,
-            passwordNueva: document.getElementById('input-password').value
-        });
-        boton.disabled = false;
-
-        if (!resultado.exito) {
-            error.textContent = resultado.mensaje;
-            error.hidden = false;
-            return;
+    async function iniciar() {
+        const usuario = Auth.usuario();
+        document.getElementById('seccion-cuenta').hidden = !usuario;
+        document.getElementById('seccion-invitado').hidden = !!usuario;
+        document.getElementById('seccion-datos').hidden = !usuario;
+        if (usuario) {
+            renderResumen();
+            document.getElementById('input-nombre').value = usuario.nombre;
+            document.getElementById('input-telefono').value = usuario.telefono;
+            document.getElementById('form-perfil').addEventListener('submit', guardarPerfil);
+            document.getElementById('form-password').addEventListener('submit', guardarPassword);
         }
-        document.getElementById('input-password-actual').value = '';
-        document.getElementById('input-password').value = '';
-        refrescarUsuario();
-        renderResumen();
-        UI.montarEncabezado('perfil');
-        UI.toast(resultado.mensaje);
+        await renderReservas();
+    }
+
+    function renderResumen(reservas = []) {
+        const u = Auth.usuario();
+        const jugadas = reservas.filter((r) => r.estado === 'confirmada').length;
+        document.getElementById('perfil-saludo-nombre').textContent = u.nombre.split(' ')[0];
+        document.getElementById('perfil-puntos-val').textContent = Utils.numero(u.puntos);
+        document.getElementById('perfil-total-alquileres').textContent = jugadas;
+    }
+
+    async function guardarPerfil(e) {
+        e.preventDefault();
+        const error = document.getElementById('perfil-error');
+        const r = await UI.conBoton(e.target.querySelector('[type="submit"]'), 'Guardando…', () => Auth.actualizarPerfil({
+            nombre: document.getElementById('input-nombre').value,
+            telefono: document.getElementById('input-telefono').value
+        }));
+        error.textContent = r.exito ? '' : r.mensaje;
+        error.hidden = r.exito;
+        if (r.exito) { UI.toast(r.mensaje); UI.montarEncabezado('perfil'); renderResumen(); }
+    }
+
+    async function guardarPassword(e) {
+        e.preventDefault();
+        const error = document.getElementById('password-error');
+        const r = await UI.conBoton(e.target.querySelector('[type="submit"]'), 'Guardando…', () => Auth.cambiarPassword(
+            document.getElementById('input-password-actual').value, document.getElementById('input-password').value));
+        error.textContent = r.exito ? '' : r.mensaje;
+        error.hidden = r.exito;
+        if (r.exito) { e.target.reset(); UI.toast(r.mensaje); }
     }
 
     function ordenar(reservas) {
-        const ahora = new Date();
-        const vigentes = reservas.filter((r) => Booking.ESTADOS_VIGENTES.includes(r.estado) && Booking.fin(r) > ahora)
-            .sort((a, b) => Booking.inicio(a) - Booking.inicio(b));
-        const resto = reservas.filter((r) => !vigentes.includes(r))
-            .sort((a, b) => Booking.inicio(b) - Booking.inicio(a));
-        return [...vigentes, ...resto];
+        const vigentes = reservas.filter(Booking.vigente).sort((a, b) => Booking.inicio(a) - Booking.inicio(b));
+        const resto = reservas.filter((r) => !Booking.vigente(r)).sort((a, b) => Booking.inicio(b) - Booking.inicio(a));
+        return { vigentes, resto };
     }
 
-    function renderReservas() {
+    async function renderReservas() {
+        const usuario = Auth.usuario();
         const contenedor = document.getElementById('lista-mis-reservas');
-        const reservas = ordenar(Booking.reservasDeUsuario(usuario.id));
-        const cfg = Config.get();
-
-        if (!reservas.length) {
-            contenedor.innerHTML = `<p class="vacio">Todavía no tenés reservas. <a href="index.html">Reservá tu primer turno</a>.</p>`;
+        let reservas = [];
+        try {
+            const locales = await Booking.cargarRecordadas();
+            if (usuario) {
+                const propias = await Db.q(Db.sb.from('reservas').select('*').eq('usuario_id', usuario.id).order('fecha', { ascending: false }).limit(200));
+                const ids = new Set(propias.map((r) => r.id));
+                reservas = [...propias, ...locales.filter((r) => !ids.has(r.id))];
+                renderResumen(propias);
+            } else {
+                reservas = locales;
+            }
+        } catch (e) {
+            contenedor.innerHTML = `<p class="vacio">${Utils.esc(e.message)}</p>`;
             return;
         }
 
-        contenedor.innerHTML = reservas.map((r) => {
-            const [texto, clase] = ETIQUETAS[r.estado] || [r.estado, ''];
-            const vigente = Booking.ESTADOS_VIGENTES.includes(r.estado);
-            const permiso = vigente ? Booking.puedeCancelar(r, usuario) : { ok: false };
-
-            let pie = '';
-            if (r.estado === 'pendiente_pago') {
-                const mensaje = `Hola, soy ${usuario.nombre}. Te envío el comprobante de la seña de mi turno del ${Utils.fechaLarga(r.fecha)}, ${Booking.rangoHorario(r)}, en ${r.nombreCancha}.`;
-                pie = `<p class="reserva-nota">Transferí la seña al alias <strong>${Utils.esc(cfg.alias)}</strong> antes de las <strong>${Utils.horaLocal(new Date(r.venceEn))} hs</strong> y enviá el comprobante.</p>
-                       <a class="btn btn-whatsapp btn-sm" href="${Utils.esc(Utils.linkWhatsApp(cfg.whatsapp, mensaje))}" target="_blank" rel="noopener">Enviar comprobante</a>`;
-            }
-            if (vigente) {
-                pie += permiso.ok
-                    ? `<button type="button" class="btn btn-peligro btn-sm" data-cancelar="${Utils.esc(r.id)}">Cancelar turno</button>`
-                    : `<p class="reserva-nota">${Utils.esc(permiso.motivo)} Si necesitás cambiarlo, <a href="${Utils.esc(Utils.linkWhatsApp(cfg.whatsapp, 'Hola, necesito modificar una reserva.'))}" target="_blank" rel="noopener">escribinos por WhatsApp</a>.</p>`;
-            }
-            if (r.estado === 'cancelada' && r.motivo) pie = `<p class="reserva-nota">${Utils.esc(r.motivo)}.</p>`;
-
-            return `
-                <article class="reserva-card ${r.estado === 'activa' ? 'destacada' : ''}">
-                    <header>
-                        <strong>${Utils.esc(r.nombreCancha)}</strong>
-                        <span class="badge ${clase}">${texto}</span>
-                    </header>
-                    <p class="reserva-cuando">${Utils.fechaLarga(r.fecha)} · ${Booking.rangoHorario(r)}</p>
-                    <p class="reserva-montos">Seña: ${Utils.moneda(r.montoSenia)} · Resto en la cancha: ${Utils.moneda(r.saldoRestante ?? Math.max(0, r.precioTotal - r.montoSenia))}</p>
-                    ${pie ? `<div class="reserva-acciones">${pie}</div>` : ''}
-                </article>`;
-        }).join('');
-    }
-
-    async function alHacerClic(evento) {
-        const boton = evento.target.closest('[data-cancelar]');
-        if (!boton) return;
-        const limite = Config.get().limiteHorasCancelacion;
-        const ok = await UI.confirmar(
-            '¿Cancelar este turno?',
-            `El horario quedará libre para otros clientes. Recordá que solo se puede cancelar hasta ${limite} horas antes del partido.`,
-            { textoOk: 'Sí, cancelar turno', textoCancelar: 'No, mantenerlo', peligro: true }
-        );
-        if (!ok) return;
-
-        const resultado = Booking.cancelarReserva(boton.dataset.cancelar, usuario);
-        UI.toast(resultado.mensaje, resultado.exito ? 'ok' : 'error');
-        refrescarUsuario();
-        renderResumen();
-        renderReservas();
+        const { vigentes, resto } = ordenar(reservas);
+        if (!reservas.length) {
+            contenedor.innerHTML = `<div class="vacio"><p>${usuario ? 'Todavía no tenés reservas.' : 'No hay reservas hechas desde este celular.'}</p><a class="btn" href="index.html">Reservar un turno</a></div>`;
+            return;
+        }
+        const tarjeta = (r) => {
+            const e = Booking.etiqueta(r);
+            return `<a class="reserva-card ${Booking.vigente(r) && r.estado === 'confirmada' ? 'destacada' : ''}" href="${Utils.esc(Booking.linkReserva(r))}">
+                <header><strong>${Utils.esc(r.cancha_nombre)}</strong><span class="badge ${e.clase}">${e.texto}</span></header>
+                <p class="reserva-cuando">${Utils.esc(Utils.fechaAmigable(r.fecha))} · ${Booking.rango(r)}</p>
+                <p class="reserva-montos">Código ${Utils.esc(r.codigo)} · Resto en la cancha: ${Utils.moneda(Booking.saldo(r))}</p>
+            </a>`;
+        };
+        contenedor.innerHTML = `
+            ${vigentes.length ? `<h3 class="sub-titulo">Próximos turnos</h3><div class="lista-reservas">${vigentes.map(tarjeta).join('')}</div>` : '<p class="vacio">No tenés turnos próximos. <a href="index.html">Reservá uno</a>.</p>'}
+            ${resto.length ? `<details class="historial"><summary>Historial (${resto.length})</summary><div class="lista-reservas">${resto.map(tarjeta).join('')}</div></details>` : ''}`;
     }
 })();
